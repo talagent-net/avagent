@@ -1,17 +1,24 @@
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { colors as defaultColors } from "./colors";
+import { AnimationProvider, useAnimationRenderer, useCapability, useCapabilityAnimation } from "./animation/context";
+import { createBlinkAnimation } from "./animation/blink";
 
-export type Mode = "hangout" | "jump";
+const BLINK_KEY = "eyes.blink";
+
+export type Mode = "hangout" | "jump" | "debug";
 
 export interface ColorTheme {
   primary: string;
   primaryDark: string;
   primaryMid: string;
+  outline: string;
 }
 
 export const defaultTheme: ColorTheme = {
   primary: defaultColors.primary,
   primaryDark: defaultColors.primaryDark,
   primaryMid: defaultColors.primaryMid,
+  outline: "#2a2a2a",
 };
 
 export interface TallyProps {
@@ -19,6 +26,12 @@ export interface TallyProps {
   mode?: Mode;
   theme?: ColorTheme;
   showAnchor?: boolean;
+  chestImage?: string;
+  chestOutline?: string;
+  // When mode === "debug", these drive a single capability directly,
+  // bypassing the regular mode animations.
+  debugCapability?: string;
+  debugValue?: number;
 }
 
 const BASE = {
@@ -26,8 +39,35 @@ const BASE = {
   height: 240,
 };
 
-export function Tally({ scale = 1, mode = "hangout", theme = defaultTheme, showAnchor = false }: TallyProps) {
+export function Tally(props: TallyProps) {
+  return (
+    <AnimationProvider>
+      <TallyInner {...props} />
+    </AnimationProvider>
+  );
+}
+
+function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnchor = false, chestImage, chestOutline, debugCapability, debugValue }: TallyProps) {
   const s = (v: number) => v * scale;
+
+  // Eyes blink capability — declared once at the root, rests at 1 (fully open).
+  useCapability(BLINK_KEY, 1);
+
+  // Debug value is read live via a ref so the animation closure stays stable.
+  const debugValueRef = useRef(debugValue ?? 0);
+  useEffect(() => {
+    debugValueRef.current = debugValue ?? 0;
+  }, [debugValue]);
+
+  // Pick what drives eyes.blink based on mode + which capability debug is targeting.
+  const blinkAnimation = useMemo(() => {
+    if (mode === "debug") {
+      return debugCapability === BLINK_KEY ? () => debugValueRef.current : null;
+    }
+    return createBlinkAnimation();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, debugCapability]);
+  useCapabilityAnimation(BLINK_KEY, blinkAnimation);
 
   return (
     <div
@@ -51,8 +91,8 @@ export function Tally({ scale = 1, mode = "hangout", theme = defaultTheme, showA
           }}
         />
       )}
-      <Body scale={scale} theme={theme}>
-        <Head scale={scale} theme={theme}>
+      <Body scale={scale} theme={theme} showAnchor={showAnchor} chestImage={chestImage} chestOutline={chestOutline}>
+        <Head scale={scale} theme={theme} showAnchor={showAnchor}>
           <LeftEye scale={scale} theme={theme} />
           <RightEye scale={scale} theme={theme} />
           <LeftEar scale={scale} theme={theme} />
@@ -64,7 +104,7 @@ export function Tally({ scale = 1, mode = "hangout", theme = defaultTheme, showA
         <LeftLeg scale={scale} theme={theme} showAnchor={showAnchor} />
         <RightLeg scale={scale} theme={theme} showAnchor={showAnchor} />
       </Body>
-      <Shadow scale={scale} />
+      <Shadow scale={scale} theme={theme} />
     </div>
   );
 }
@@ -75,14 +115,26 @@ const BODY_OFFSET = 12;
 const BODY_RADIUS_TOP = 32;
 const BODY_RADIUS_BOT = 24;
 const BODY_BOTTOM = 15;
+const BODY_PIVOT_X = (BODY_W + BODY_OFFSET) / 2;
+const BODY_PIVOT_Y = (BODY_H + BODY_OFFSET) * 0.6;
+const BODY_ROTATION = 0;
+const CHEST_WIDTH = 34;
+const CHEST_HEIGHT = 28;
+const CHEST_TOP_RATIO = 0.25;
 
 function Body({
   scale = 1,
   theme,
+  showAnchor = false,
+  chestImage,
+  chestOutline,
   children,
 }: {
   scale: number;
   theme: ColorTheme;
+  showAnchor?: boolean;
+  chestImage?: string;
+  chestOutline?: string;
   children: React.ReactNode;
 }) {
   const s = (v: number) => v * scale;
@@ -96,7 +148,8 @@ function Body({
         position: "absolute",
         bottom: s(BODY_BOTTOM),
         left: "50%",
-        transform: "translateX(-50%)",
+        transform: `translateX(-50%) rotate(${BODY_ROTATION}deg)`,
+        transformOrigin: `${s(BODY_PIVOT_X)}px ${s(BODY_PIVOT_Y)}px`,
         width: s(BODY_W + BODY_OFFSET),
         height: s(BODY_H + BODY_OFFSET),
       }}
@@ -110,7 +163,7 @@ function Body({
           left: 0,
           width: s(BODY_W + BODY_OFFSET),
           height: s(BODY_H + BODY_OFFSET),
-          backgroundColor: theme.primaryDark,
+          backgroundColor: theme.outline,
           borderRadius: baseRadius(BODY_OFFSET / 2),
         }}
       />
@@ -127,25 +180,81 @@ function Body({
           borderRadius: baseRadius(0),
         }}
       />
+      {(chestImage || chestOutline) && (
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 4,
+            top: s(BODY_OFFSET / 2 + BODY_H * CHEST_TOP_RATIO),
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: s(CHEST_WIDTH),
+            height: s(CHEST_HEIGHT),
+          }}
+        >
+          {/* Outline layer — outer image, tinted primaryDark */}
+          {chestOutline && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                backgroundColor: theme.primaryMid,
+                WebkitMaskImage: `url(${chestOutline})`,
+                maskImage: `url(${chestOutline})`,
+                WebkitMaskSize: "contain",
+                maskSize: "contain",
+                WebkitMaskRepeat: "no-repeat",
+                maskRepeat: "no-repeat",
+                WebkitMaskPosition: "center",
+                maskPosition: "center",
+              }}
+            />
+          )}
+          {/* Fill layer — inner image, tinted primaryMid */}
+          {chestImage && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                backgroundColor: theme.outline,
+                WebkitMaskImage: `url(${chestImage})`,
+                maskImage: `url(${chestImage})`,
+                WebkitMaskSize: "contain",
+                maskSize: "contain",
+                WebkitMaskRepeat: "no-repeat",
+                maskRepeat: "no-repeat",
+                WebkitMaskPosition: "center",
+                maskPosition: "center",
+              }}
+            />
+          )}
+        </div>
+      )}
       {children}
+      {showAnchor && <PivotMarker scale={scale} x={BODY_PIVOT_X} y={BODY_PIVOT_Y} />}
     </div>
   );
 }
 
-const HEAD_W = 130;
+const HEAD_W = 120;
 const HEAD_H = 90;
 const HEAD_OFFSET = 12;
 const HEAD_ROUNDNESS = 36;
 const HEAD_TOP = -85;
-const HEAD_FACE_INSET = 0.8;
+const HEAD_FACE_INSET = 0.7;
+const HEAD_PIVOT_X = (HEAD_W + HEAD_OFFSET) / 2;
+const HEAD_PIVOT_Y = (HEAD_H + HEAD_OFFSET) * 0.85;
+const HEAD_ROTATION = 0;
 
 function Head({
   scale = 1,
   theme,
+  showAnchor = false,
   children,
 }: {
   scale: number;
   theme: ColorTheme;
+  showAnchor?: boolean;
   children: React.ReactNode;
 }) {
   const s = (v: number) => v * scale;
@@ -154,10 +263,11 @@ function Head({
     <div
       style={{
         position: "absolute",
-        zIndex: 4,
+        zIndex: 5,
         top: s(HEAD_TOP),
         left: "50%",
-        transform: "translateX(-50%)",
+        transform: `translateX(-50%) rotate(${HEAD_ROTATION}deg)`,
+        transformOrigin: `${s(HEAD_PIVOT_X)}px ${s(HEAD_PIVOT_Y)}px`,
         width: s(HEAD_W + HEAD_OFFSET),
         height: s(HEAD_H + HEAD_OFFSET),
       }}
@@ -170,7 +280,7 @@ function Head({
           left: 0,
           width: s(HEAD_W + HEAD_OFFSET),
           height: s(HEAD_H + HEAD_OFFSET),
-          backgroundColor: theme.primaryDark,
+          backgroundColor: theme.outline,
           borderRadius: s(HEAD_ROUNDNESS + HEAD_OFFSET / 2),
         }}
       />
@@ -181,8 +291,8 @@ function Head({
           zIndex: 1,
           top: s(HEAD_OFFSET / 2),
           left: s(HEAD_OFFSET / 2),
-          width: s(HEAD_W),
-          height: s(HEAD_H),
+          width: s(HEAD_W - HEAD_OFFSET / 8),
+          height: s(HEAD_H - HEAD_OFFSET / 8),
           backgroundColor: theme.primaryMid,
           borderRadius: s(HEAD_ROUNDNESS),
         }}
@@ -201,6 +311,7 @@ function Head({
         }}
       />
       {children}
+      {showAnchor && <PivotMarker scale={scale} x={HEAD_PIVOT_X} y={HEAD_PIVOT_Y} />}
     </div>
   );
 }
@@ -211,12 +322,31 @@ const EYE_TOP_RATIO = 0.55;
 const EYE_SIDE_RATIO = 0.24;
 const PUPIL_W = 8;
 const PUPIL_H = 20;
+const EYE_OFFSET = EYE_H - PUPIL_H;
+const MAX_BLINK_CLOSE = .84;
+
+function useBlinkRef(scale: number) {
+  const ref = useRef<HTMLDivElement>(null);
+  const render = useCallback((caps: ReadonlyMap<string, number>) => {
+    const el = ref.current;
+    if (!el) return;
+    const blink = caps.get(BLINK_KEY) ?? 1;
+    el.style.height = `${(blink * MAX_BLINK_CLOSE + (1 - MAX_BLINK_CLOSE)) * EYE_H * scale}px`;
+    el.style.top = `${(HEAD_H * EYE_TOP_RATIO + ((1 - blink) * (EYE_H / 2) * MAX_BLINK_CLOSE)) * scale}px`;
+    const pupil = el.firstElementChild as HTMLElement | null;
+    if (pupil) pupil.style.height = `${Math.max(0, (blink * MAX_BLINK_CLOSE + (1 - MAX_BLINK_CLOSE)) * EYE_H - EYE_OFFSET) * scale}px`;
+  }, [scale]);
+  useAnimationRenderer(render);
+  return ref;
+}
 
 function LeftEye({ scale = 1, theme }: { scale: number; theme: ColorTheme }) {
   const s = (v: number) => v * scale;
+  const eyeRef = useBlinkRef(scale);
 
   return (
     <div
+      ref={eyeRef}
       style={{
         position: "absolute",
         zIndex: 3,
@@ -235,7 +365,7 @@ function LeftEye({ scale = 1, theme }: { scale: number; theme: ColorTheme }) {
           left: s((EYE_W - PUPIL_W) / 2),
           width: s(PUPIL_W),
           height: s(PUPIL_H),
-          backgroundColor: theme.primaryDark,
+          backgroundColor: theme.outline,
           borderRadius: s(PUPIL_W / 2),
         }}
       />
@@ -245,9 +375,11 @@ function LeftEye({ scale = 1, theme }: { scale: number; theme: ColorTheme }) {
 
 function RightEye({ scale = 1, theme }: { scale: number; theme: ColorTheme }) {
   const s = (v: number) => v * scale;
+  const eyeRef = useBlinkRef(scale);
 
   return (
     <div
+      ref={eyeRef}
       style={{
         position: "absolute",
         zIndex: 3,
@@ -266,7 +398,7 @@ function RightEye({ scale = 1, theme }: { scale: number; theme: ColorTheme }) {
           left: s((EYE_W - PUPIL_W) / 2),
           width: s(PUPIL_W),
           height: s(PUPIL_H),
-          backgroundColor: theme.primaryDark,
+          backgroundColor: theme.outline,
           borderRadius: s(PUPIL_W / 2),
         }}
       />
@@ -274,7 +406,7 @@ function RightEye({ scale = 1, theme }: { scale: number; theme: ColorTheme }) {
   );
 }
 
-const EAR_TOP_RATIO = 0.35;
+const EAR_TOP_RATIO = 0.42;
 const EAR_HEIGHT_RATIO = 0.4;
 
 function LeftEar({ scale = 1, theme }: { scale: number; theme: ColorTheme }) {
@@ -286,11 +418,11 @@ function LeftEar({ scale = 1, theme }: { scale: number; theme: ColorTheme }) {
         position: "absolute",
         zIndex: 0,
         top: s(HEAD_H * EAR_TOP_RATIO),
-        left: s(-HEAD_OFFSET / 2),
+        left: s(-HEAD_OFFSET / 3),
         width: s(HEAD_OFFSET),
         height: s(HEAD_H * EAR_HEIGHT_RATIO),
-        backgroundColor: theme.primaryDark,
-        borderRadius: `${s(HEAD_ROUNDNESS / 4)}px`,
+        backgroundColor: theme.outline,
+        borderRadius: `${s(HEAD_OFFSET / 3)}px`,
       }}
     />
   );
@@ -305,11 +437,11 @@ function RightEar({ scale = 1, theme }: { scale: number; theme: ColorTheme }) {
         position: "absolute",
         zIndex: 0,
         top: s(HEAD_H * EAR_TOP_RATIO),
-        right: s(-HEAD_OFFSET / 2),
+        right: s(-HEAD_OFFSET / 3),
         width: s(HEAD_OFFSET),
         height: s(HEAD_H * EAR_HEIGHT_RATIO),
-        backgroundColor: theme.primaryDark,
-        borderRadius: `${s(HEAD_ROUNDNESS / 4)}px`,
+        backgroundColor: theme.outline,
+        borderRadius: `${s(HEAD_OFFSET / 3)}px`,
       }}
     />
   );
@@ -352,7 +484,7 @@ function Antenna({ scale = 1, theme, showAnchor = false }: { scale: number; them
         right: s(HEAD_OFFSET / 2 + ANTENNA_RIGHT),
         width: s(ANTENNA_W),
         height: s(ANTENNA_H),
-        backgroundColor: theme.primaryDark,
+        backgroundColor: theme.outline,
         borderRadius: s(ANTENNA_RADIUS),
         transformOrigin: "bottom center",
         transform: `rotate(${ANTENNA_ANGLE}deg)`,
@@ -388,7 +520,7 @@ function LeftArm({ scale = 1, theme, showAnchor = false }: { scale: number; them
           left: 0,
           width: s(ARM_UPPER_W),
           height: s(ARM_UPPER_H),
-          backgroundColor: theme.primaryDark,
+          backgroundColor: theme.outline,
           borderRadius: s(ARM_UPPER_W / 2),
           // Shoulder pivot: inner (right) edge, top
           transformOrigin: `${s(ARM_UPPER_W / 2)}px ${s(ARM_UPPER_W / 2)}px`,
@@ -402,7 +534,7 @@ function LeftArm({ scale = 1, theme, showAnchor = false }: { scale: number; them
             left: 0,
             width: s(ARM_LOWER_W),
             height: s(ARM_LOWER_H),
-            backgroundColor: theme.primaryDark,
+            backgroundColor: theme.outline,
             borderRadius: `${s(ARM_LOWER_W / 2)}px ${s(ARM_LOWER_W / 2)}px ${s(ARM_LOWER_W / 4)}px ${s(ARM_LOWER_W / 2)}px`,
             // Elbow pivot: center top
             transformOrigin: `${s(ARM_UPPER_W / 2)}px ${s(ARM_LOWER_W / 2)}px`,
@@ -460,7 +592,7 @@ function RightArm({ scale = 1, theme, showAnchor = false }: { scale: number; the
           right: 0,
           width: s(ARM_UPPER_W),
           height: s(ARM_UPPER_H),
-          backgroundColor: theme.primaryDark,
+          backgroundColor: theme.outline,
           borderRadius: s(ARM_UPPER_W / 2),
           // Shoulder pivot: inner (left) edge, top
           transformOrigin: `${s(ARM_UPPER_W / 2)}px ${s(ARM_UPPER_W / 2)}px`,
@@ -474,7 +606,7 @@ function RightArm({ scale = 1, theme, showAnchor = false }: { scale: number; the
             right: 0,
             width: s(ARM_LOWER_W),
             height: s(ARM_LOWER_H),
-            backgroundColor: theme.primaryDark,
+            backgroundColor: theme.outline,
             borderRadius: `${s(ARM_LOWER_W / 2)}px ${s(ARM_LOWER_W / 2)}px ${s(ARM_LOWER_W / 2)}px ${s(ARM_LOWER_W / 4)}px`,
             // Elbow pivot: center top
             transformOrigin: `${s(ARM_LOWER_W / 2)}px ${s(ARM_LOWER_W / 2)}px`,
@@ -546,7 +678,7 @@ function LeftLeg({ scale = 1, theme, showAnchor = false }: { scale: number; them
           left: s(BODY_OFFSET / 2 + BODY_W * LEG_HIP_INSET),
           width: s(LEG_W),
           height: s(LEG_H),
-          backgroundColor: theme.primaryDark,
+          backgroundColor: theme.outline,
           borderRadius: s(LEG_W / 2),
           // Hip pivot: top center
           transformOrigin: `${s(LEG_W / 2)}px ${s(LEG_W / 2)}px`,
@@ -561,7 +693,7 @@ function LeftLeg({ scale = 1, theme, showAnchor = false }: { scale: number; them
             width: s(FOOT_H),
             height: s(FOOT_W),
             transformOrigin: `${s(LEG_W / 2)}px ${s(FOOT_H / 2)}px`,
-            backgroundColor: theme.primaryDark,
+            backgroundColor: theme.outline,
             borderRadius: `${s((FOOT_H) * .25)}px ${s((FOOT_H) * .25)}px ${s((FOOT_H) * .25)}px ${s((FOOT_H) * .5)}px`,
             transform: `rotate(${LEFT_FOOT_ANGLE + 90}deg)`,
           }}
@@ -619,7 +751,7 @@ function RightLeg({ scale = 1, theme, showAnchor = false }: { scale: number; the
           right: s(BODY_OFFSET / 2 + BODY_W * LEG_HIP_INSET),
           width: s(LEG_W),
           height: s(LEG_H),
-          backgroundColor: theme.primaryDark,
+          backgroundColor: theme.outline,
           borderRadius: s(LEG_W / 2),
           // Hip pivot: top center
           transformOrigin: `${s(LEG_W / 2)}px ${s(LEG_W / 2)}px`,
@@ -634,7 +766,7 @@ function RightLeg({ scale = 1, theme, showAnchor = false }: { scale: number; the
             width: s(FOOT_H),
             height: s(FOOT_W),
             transformOrigin: `${s(FOOT_H - LEG_W / 2)}px ${s(FOOT_H / 2)}px`,
-            backgroundColor: theme.primaryDark,
+            backgroundColor: theme.outline,
             borderRadius: `${s((FOOT_H) * .25)}px ${s((FOOT_H) * .25)}px ${s((FOOT_H) * .5)}px ${s((FOOT_H) * .25)}px`,
             transform: `rotate(${RIGHT_FOOT_ANGLE - 90}deg)`,
           }}
@@ -678,24 +810,25 @@ function RightLeg({ scale = 1, theme, showAnchor = false }: { scale: number; the
   );
 }
 
-const SHADOW_W = 90;
+const SHADOW_W = 110;
 const SHADOW_H = 14;
-const SHADOW_BLUR = 4;
-const SHADOW_OPACITY = 0.16;
+const SHADOW_BLUR = 5;
+const SHADOW_OPACITY = 0.2;
 
-function Shadow({ scale = 1 }: { scale: number }) {
+function Shadow({ scale = 1, theme }: { scale: number; theme: ColorTheme }) {
   const s = (v: number) => v * scale;
 
   return (
     <div
       style={{
         position: "absolute",
-        bottom: s(-10),
+        zIndex: -1,
+        bottom: s(-9),
         left: "50%",
         transform: "translateX(-50%)",
         width: s(SHADOW_W),
         height: s(SHADOW_H),
-        backgroundColor: `rgba(0,0,0,${SHADOW_OPACITY})`,
+        backgroundColor: `color-mix(in srgb, ${theme.outline} ${SHADOW_OPACITY * 100}%, transparent)`,
         borderRadius: "50%",
         filter: `blur(${s(SHADOW_BLUR)}px)`,
       }}
