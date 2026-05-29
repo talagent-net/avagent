@@ -44,10 +44,20 @@ const BODY_LEAN_DEG = 7;    // peak lean at body.lean extremes (degrees), signed
 const LEG_STRIDE_DEG = 40;   // peak leg rotation at legs.stride extremes (degrees), anti-phase across legs
 const ARM_STRIDE_DEG = 22;   // peak arm rotation at arms.stride extremes (degrees), anti-phase across arms & counter to legs
 const HAND_WAVE_DEG = 25;   // peak forearm rotation at arms.left.wave extremes (degrees) — the disagree hand-wave
-// Per-limb flail rotation amplitude (degrees), symmetric ± around the limb's rest pose. The cap
-// drives (cap-0.5)*2*DEG, so the flail neutral (0.5) = 0 → limbs sit at rest when idle/hangout.
-const LEG_FLAIL_DEG = 55;
-const ARM_FLAIL_DEG = 55;
+// Legs: same scheme as the arms — the flail cap maps linearly to an absolute leg angle in
+// [LEG_FLAIL_MIN, LEG_FLAIL_MAX], cap rests at LEG_FLAIL_REST_CAP (maps to the leg's rest angle,
+// LEFT_LEG_ANGLE = 9°) so legs sit at rest when not flailing; right leg mirrors. Range must
+// include 9°.
+const LEG_FLAIL_MIN = -10;
+const LEG_FLAIL_MAX = 114;
+const LEG_FLAIL_REST_CAP = (9 - LEG_FLAIL_MIN) / (LEG_FLAIL_MAX - LEG_FLAIL_MIN); // 9 = LEFT_LEG_ANGLE
+// Arms: the flail cap maps linearly to an absolute upper-arm angle in [ARM_FLAIL_MIN, ARM_FLAIL_MAX].
+// When the flail isn't being applied, the cap rests at ARM_FLAIL_REST_CAP — the value that maps to
+// the arm's rest angle (LEFT_UPPER_ANGLE = 25°) — so the arm sits at rest. The right arm mirrors
+// (sign flip). The range must include 25° for the rest mapping to exist.
+const ARM_FLAIL_MIN = 20;
+const ARM_FLAIL_MAX = 150;
+const ARM_FLAIL_REST_CAP = (25 - ARM_FLAIL_MIN) / (ARM_FLAIL_MAX - ARM_FLAIL_MIN); // 25 = LEFT_UPPER_ANGLE
 
 // head.tilt, head.turn, and body.turn all squash the head's geometry — head.tilt on the
 // vertical axis, head.turn and body.turn (via the effective-head-turn sum) on the horizontal.
@@ -134,10 +144,10 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   useCapability(BODY_LEAN_KEY, 0.5); // 0.5 = upright; 0/1 = lean left/right into travel
   useCapability(LEGS_STRIDE_KEY, 0.5);// 0.5 = neutral stance; 0/1 = legs at opposite ends of a step (anti-phase)
   useCapability(ARMS_STRIDE_KEY, 0.5);// 0.5 = arms at rest; 0/1 = arms at opposite ends of a swing (anti-phase, counter to legs)
-  useCapability(ARMS_LEFT_FLAIL_KEY, 0.5);  // 0.5 = neutral; per-arm frantic free-fall thrash (raw chaotic)
-  useCapability(ARMS_RIGHT_FLAIL_KEY, 0.5);
-  useCapability(LEGS_LEFT_FLAIL_KEY, 0.5);  // per-leg frantic free-fall thrash (raw chaotic)
-  useCapability(LEGS_RIGHT_FLAIL_KEY, 0.5);
+  useCapability(ARMS_LEFT_FLAIL_KEY, ARM_FLAIL_REST_CAP);  // rest cap → arm at its rest angle when not flailing
+  useCapability(ARMS_RIGHT_FLAIL_KEY, ARM_FLAIL_REST_CAP);
+  useCapability(LEGS_LEFT_FLAIL_KEY, LEG_FLAIL_REST_CAP);  // rest cap → leg at its rest angle when not flailing
+  useCapability(LEGS_RIGHT_FLAIL_KEY, LEG_FLAIL_REST_CAP);
   useCapability(BODY_CROUCH_KEY, 0); // 0 = standing; 1 = full crouch (body foreshortens + sinks, head/shoulders follow)
 
   // head.tilt vs head.turn — the engine will smoothly unwind one when the other gets engaged.
@@ -265,6 +275,10 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   const activate = useCallback((spec: ActionSpec | null) => {
     setActive(spec ? { spec, id: ++activationCounterRef.current } : null);
   }, []);
+  // Drop only: flips true at fallMs (when the landing crouch begins) so the flail animations are
+  // dropped — the engine then eases each limb from its flail pose back to rest (its normal
+  // release), while the crouch keeps playing. Reset to false at the start of every action.
+  const [flailReleased, setFlailReleased] = useState(false);
   // Latest-value ref so the prop effect can read whether an action is in flight without a stale
   // closure (written during render — see debugOverridesRef).
   const activeRef = useRef(active);
@@ -297,10 +311,15 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
       walkDelta = sign * travelBodyWidths * BODY_W * scale;
       walkStateRef.current = { startElapsed: null, delta: walkDelta, rampStartMs, rampEndMs, accelMs, arrive };
     }
-    // drop: arm the vertical free-fall (transient; lands on the anchor, commits nothing).
+    // Flail applies during the fall; reset the release flag for this action.
+    setFlailReleased(false);
+    let fallTimer: ReturnType<typeof setTimeout> | undefined;
+    // drop: arm the vertical free-fall (transient; lands on the anchor, commits nothing). When the
+    // fall finishes (landing crouch begins) release the flail so the engine eases the limbs to rest.
     if (activeAction.descent) {
       const { offsetBodyWidths, fallMs } = activeAction.descent;
       fallStateRef.current = { startElapsed: null, offset: offsetBodyWidths * BODY_W * scale, fallMs };
+      fallTimer = setTimeout(() => setFlailReleased(true), fallMs);
     }
     const timer = setTimeout(() => {
       if (activeAction.locomotion) {
@@ -315,7 +334,10 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
       queuedActionSpecRef.current = null;
       activate(next);
     }, activeAction.duration);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      if (fallTimer) clearTimeout(fallTimer);
+    };
   }, [activeAction, scale, onWalkComplete, activate]);
 
   // eyes.blink — action > debug > (no ambient in debug mode) > hangout's random blinks.
@@ -397,13 +419,15 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   useCapabilityAnimation(ARMS_STRIDE_KEY, armsStrideAnimation);
 
   // Per-limb flail (drop) — action > debug. Four independent capabilities.
-  const armsLeftFlailAnimation = useMemo(() => activeAction?.animations[ARMS_LEFT_FLAIL_KEY] ?? debugAnimFor(ARMS_LEFT_FLAIL_KEY), [activeAction, debugAnimFor]);
+  // Each flail: the action drives it during the fall; once flailReleased (landing crouch begins)
+  // it falls through to debug/null so the engine eases the limb from its flail pose back to rest.
+  const armsLeftFlailAnimation = useMemo(() => (!flailReleased && activeAction?.animations[ARMS_LEFT_FLAIL_KEY]) || debugAnimFor(ARMS_LEFT_FLAIL_KEY), [activeAction, debugAnimFor, flailReleased]);
   useCapabilityAnimation(ARMS_LEFT_FLAIL_KEY, armsLeftFlailAnimation);
-  const armsRightFlailAnimation = useMemo(() => activeAction?.animations[ARMS_RIGHT_FLAIL_KEY] ?? debugAnimFor(ARMS_RIGHT_FLAIL_KEY), [activeAction, debugAnimFor]);
+  const armsRightFlailAnimation = useMemo(() => (!flailReleased && activeAction?.animations[ARMS_RIGHT_FLAIL_KEY]) || debugAnimFor(ARMS_RIGHT_FLAIL_KEY), [activeAction, debugAnimFor, flailReleased]);
   useCapabilityAnimation(ARMS_RIGHT_FLAIL_KEY, armsRightFlailAnimation);
-  const legsLeftFlailAnimation = useMemo(() => activeAction?.animations[LEGS_LEFT_FLAIL_KEY] ?? debugAnimFor(LEGS_LEFT_FLAIL_KEY), [activeAction, debugAnimFor]);
+  const legsLeftFlailAnimation = useMemo(() => (!flailReleased && activeAction?.animations[LEGS_LEFT_FLAIL_KEY]) || debugAnimFor(LEGS_LEFT_FLAIL_KEY), [activeAction, debugAnimFor, flailReleased]);
   useCapabilityAnimation(LEGS_LEFT_FLAIL_KEY, legsLeftFlailAnimation);
-  const legsRightFlailAnimation = useMemo(() => activeAction?.animations[LEGS_RIGHT_FLAIL_KEY] ?? debugAnimFor(LEGS_RIGHT_FLAIL_KEY), [activeAction, debugAnimFor]);
+  const legsRightFlailAnimation = useMemo(() => (!flailReleased && activeAction?.animations[LEGS_RIGHT_FLAIL_KEY]) || debugAnimFor(LEGS_RIGHT_FLAIL_KEY), [activeAction, debugAnimFor, flailReleased]);
   useCapabilityAnimation(LEGS_RIGHT_FLAIL_KEY, legsRightFlailAnimation);
 
   // body.crouch — action > debug. No mode-level idle; no action drives it yet (debug-scrubbable).
@@ -1386,10 +1410,12 @@ function useArmRef(scale: number, side: "left" | "right") {
       const swingSign = isLeft ? -1 : 1;
       const swingDelta = swingSign * (swing - 0.5) * 2 * ARM_STRIDE_DEG;
 
-      // *.flail (drop) — per-arm thrash, independent per limb, symmetric ± around rest (neutral at
-      // cap 0.5 → arms rest in hangout). Mirrored per side so the two arms flail in opposite directions.
-      const armFlailCap = caps.get(isLeft ? ARMS_LEFT_FLAIL_KEY : ARMS_RIGHT_FLAIL_KEY) ?? 0.5;
-      const flailDelta = (isLeft ? 1 : -1) * (armFlailCap - 0.5) * 2 * ARM_FLAIL_DEG;
+      // *.flail (drop) — per-arm. The cap maps linearly to an absolute upper-arm angle in
+      // [ARM_FLAIL_MIN, ARM_FLAIL_MAX]; at its rest cap the arm sits at LEFT_UPPER_ANGLE (rest), so
+      // the flail is a no-op when not applied. Mirrored per side (sign flip). Expressed as a delta.
+      const armFlailCap = caps.get(isLeft ? ARMS_LEFT_FLAIL_KEY : ARMS_RIGHT_FLAIL_KEY) ?? ARM_FLAIL_REST_CAP;
+      const flailMag = ARM_FLAIL_MIN + armFlailCap * (ARM_FLAIL_MAX - ARM_FLAIL_MIN);
+      const flailDelta = (isLeft ? 1 : -1) * (flailMag - LEFT_UPPER_ANGLE);
 
       // arms.left.raise — left arm only; the "stop" gesture composes on top of the rest pose.
       const raise = isLeft ? (caps.get(ARMS_LEFT_RAISE_KEY) ?? 0) : 0;
@@ -1629,11 +1655,12 @@ function useLegRef(scale: number, side: "left" | "right") {
       const swing = caps.get(LEGS_STRIDE_KEY) ?? 0.5;
       const swingSign = isLeft ? 1 : -1;
       const restAngle = isLeft ? LEFT_LEG_ANGLE : RIGHT_LEG_ANGLE;
-      // *.flail (drop) — per-leg thrash, independent per limb, symmetric ± around the rest leg.
-      // The per-leg cap drives it directly (so the debug slider works standalone); the cap already
-      // carries its own fade during a real drop. No bias — legs don't shift up like the arms do.
-      const legFlailCap = caps.get(isLeft ? LEGS_LEFT_FLAIL_KEY : LEGS_RIGHT_FLAIL_KEY) ?? 0.5;
-      const flailDelta = (legFlailCap - 0.5) * 2 * LEG_FLAIL_DEG;
+      // *.flail (drop) — per-leg, exactly like the arms: the cap maps linearly to an absolute leg
+      // angle in [LEG_FLAIL_MIN, LEG_FLAIL_MAX]; at its rest cap the leg sits at LEFT_LEG_ANGLE
+      // (rest), so it's a no-op when not applied. Mirrored per side (sign flip). Expressed as a delta.
+      const legFlailCap = caps.get(isLeft ? LEGS_LEFT_FLAIL_KEY : LEGS_RIGHT_FLAIL_KEY) ?? LEG_FLAIL_REST_CAP;
+      const legFlailMag = LEG_FLAIL_MIN + legFlailCap * (LEG_FLAIL_MAX - LEG_FLAIL_MIN);
+      const flailDelta = (isLeft ? 1 : -1) * (legFlailMag - LEFT_LEG_ANGLE);
       const legAngle = restAngle + swingSign * (swing - 0.5) * 2 * LEG_STRIDE_DEG + flailDelta;
 
       // Foot slide combines trailing-forward + leading-pullback contributions. Only one

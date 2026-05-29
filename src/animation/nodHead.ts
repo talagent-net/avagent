@@ -11,7 +11,7 @@ import { createCyclicAnimation, type CyclicDirection } from "./cyclic";
 const NEUTRAL = 0.5;
 const AMPLITUDE = 0.18;             // ±0.18 from neutral in input space — a decisive nod
 const CYCLE_MS = 420;               // one full down-up-down cycle
-const CYCLES = 1.5;
+const CYCLES = 2.5;
 const DIRECTION: CyclicDirection = -1;  // -1 = nod DOWN first then up; +1 = up first
 
 export const NOD_HEAD_DURATION_MS = CYCLE_MS * CYCLES;

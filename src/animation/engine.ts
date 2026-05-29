@@ -10,7 +10,7 @@ export type RendererFn = (caps: ReadonlyMap<string, number>) => void;
 // Release-to-rest tween duration when a capability is unwound — either because its own
 // animation was set to null, or because a conflict-group partner just received a new animation
 // and this one needs to clear out of the way. Smoothstep curve.
-const RELEASE_MS = 250;
+const RELEASE_MS = 160;
 const smoothstep = (t: number) => t * t * (3 - 2 * t);
 
 export class AnimationEngine {

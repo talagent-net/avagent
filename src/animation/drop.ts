@@ -12,22 +12,17 @@ import type { AnimationFn } from "./engine";
 
 const DROP_FALL_MS_PER_BODYWIDTH = 110; // fall duration per body-width of height (linear in distance)
 const DROP_OFFSET_PER_BODYWIDTH = 2.2;  // body-widths of on-screen height per distance unit (matches come's travel scale)
-const DROP_IMPACT_MS = 110;             // landing compress (0→1 crouch) — fast
-const DROP_RECOVER_MS = 280;            // stand up (1→0 crouch) — slower
+const DROP_IMPACT_MS = 160;             // landing compress (0→1 crouch) — fast
+const DROP_RECOVER_MS = 360;            // stand up (1→0 crouch) — slower
 // FLAIL SPEED — multiplier on how fast the arms/legs thrash, INDEPENDENT of fall speed/distance.
 // Scales the flail oscillation frequencies; the fade-in/out envelope still spans the whole fall.
-const DROP_FLAIL_SPEED = .1;
+const DROP_FLAIL_SPEED = 2.5;
 
-// Per-limb flail signature: each limb gets a distinct pair of (non-harmonic) frequencies and a
-// phase offset so the four limbs are decorrelated — a chaotic, asymmetric free-fall thrash rather
-// than a synchronized cycle. Index 0=L arm, 1=R arm, 2=L leg, 3=R leg.
-const FLAIL_FREQS: [number, number][] = [
-  [5.1, 7.7],
-  [4.3, 8.3],
-  [5.9, 6.7],
-  [4.7, 9.1],
-];
-const FLAIL_PHASES = [0, 1.7, 3.4, 5.0];
+// Per-limb flail: each limb oscillates the FULL [0,1] cap range (→ full MIN↔MAX rotation) at its
+// own speed (close to each other) and starting phase, so the four limbs look random rather than
+// synced. Index 0=L arm, 1=R arm, 2=L leg, 3=R leg.
+const FLAIL_SPEEDS = [1.0, 1.17, 0.88, 1.09]; // per-limb rate multiplier (close but individual)
+const FLAIL_PHASES = [0, 1.9, 3.5, 5.2];       // per-limb starting offset
 
 const smoothstep = (t: number) => t * t * (3 - 2 * t);
 
@@ -38,23 +33,19 @@ export type Drop = {
   animations: Record<string, AnimationFn>;
 };
 
-// Per-limb chaotic signal in [0,1] around neutral 0.5, active over [0, fallMs]. A sum of two
-// out-of-phase sines (chaotic but smooth) under a sin fade envelope (starts/ends at neutral). The
-// renderer maps (value-0.5) to a per-limb rotation exactly like the leg stride flail — same for
-// arms and legs — so the debug slider drives each limb directly. Arms additionally clamp the
-// result to a min/max band.
+// A single sine that sweeps the cap the full [0,1] range over [0, fallMs] — so the limb rotates
+// the whole MIN..MAX band. Per-limb speed + phase make the four limbs feel independent. Outside
+// the fall it returns 0.5 (the cap then settles to its rest in the component).
 function createFlail(seed: number, fallMs: number): AnimationFn {
-  const [f1, f2] = FLAIL_FREQS[seed % FLAIL_FREQS.length];
-  const ph = FLAIL_PHASES[seed % FLAIL_PHASES.length];
+  const speed = FLAIL_SPEEDS[seed % FLAIL_SPEEDS.length];
+  const phase = FLAIL_PHASES[seed % FLAIL_PHASES.length];
   let t0: number | null = null;
   return (elapsed) => {
     if (t0 === null) t0 = elapsed;
     const t = elapsed - t0;
     if (t <= 0 || t >= fallMs) return 0.5;
-    const env = Math.sin(Math.PI * (t / fallMs)); // 0 → 1 → 0 across the fall
-    const s = (t / 1000) * DROP_FLAIL_SPEED; // flail-speed knob — independent of fall speed
-    const chaotic = 0.6 * Math.sin(2 * Math.PI * f1 * s + ph) + 0.4 * Math.sin(2 * Math.PI * f2 * s + ph * 1.3);
-    return 0.5 + env * 0.5 * chaotic; // chaotic ∈ [-1,1] → [0,1]
+    const s = (t / 1000) * DROP_FLAIL_SPEED * speed; // global knob × per-limb rate
+    return 0.5 + 0.5 * Math.sin(2 * Math.PI * s + phase); // full [0,1] sweep
   };
 }
 

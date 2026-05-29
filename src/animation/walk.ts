@@ -20,7 +20,7 @@ const WALK_MS_PER_BODYWIDTH = 240; // TRAVEL SPEED — ms of travel per body-wid
                                    // total walk duration. Changing it does NOT change how many
                                    // step cycles occur, only how fast the character moves.
 const TURN_IN_MS = 120;            // time to pivot toward the travel direction before striding
-const SETTLE_MS = 200;             // time to unwind facing/lean back to neutral after arriving
+const SETTLE_MS = 160;             // time to unwind facing/lean back to neutral after arriving
 // HORIZONTAL ACCELERATION — fixed ms the body.x slide takes to ease IN at the start and OUT at the
 // end (a trapezoidal velocity profile: ramp up → constant-speed cruise → ramp down). Independent of
 // distance — a longer walk just gets a longer cruise. If a walk is too short to fit accel + decel,
@@ -42,7 +42,7 @@ const WALK_TRAVEL_PER_BODYWIDTH = 2.2;
 // sliding while still facing the camera during the engine's default unwind. Raise it for a softer
 // (but overlapping) handoff.
 const WALK_RELEASE_MS = 0;
-const WALK_FACE_TURN = 0.45;        // body.turn offset from 0.5 toward the travel direction (0.5 = full profile)
+const WALK_FACE_TURN = 0.5;        // body.turn offset from 0.5 toward the travel direction (0.5 = full profile)
 const WALK_LEAN = 0.3;             // body.lean offset from 0.5 toward the travel direction (normalized)
 const WALK_LEG_SWING = 0.5;        // legs.stride amplitude around 0.5 (0.5 = full normalized swing both ways)
 const WALK_BOUNCE_RANGE = 0.4;     // fraction of the FULL body.bounce range used per walk step
