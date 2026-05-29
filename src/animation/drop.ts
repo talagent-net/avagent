@@ -36,7 +36,8 @@ export type Drop = {
 // A single sine that sweeps the cap the full [0,1] range over [0, fallMs] — so the limb rotates
 // the whole MIN..MAX band. Per-limb speed + phase make the four limbs feel independent. Outside
 // the fall it returns 0.5 (the cap then settles to its rest in the component).
-function createFlail(seed: number, fallMs: number): AnimationFn {
+// `speedScale` is the overall thrash-rate knob (defaults to the drop's); jump passes its own.
+export function createFlail(seed: number, fallMs: number, speedScale: number = DROP_FLAIL_SPEED): AnimationFn {
   const speed = FLAIL_SPEEDS[seed % FLAIL_SPEEDS.length];
   const phase = FLAIL_PHASES[seed % FLAIL_PHASES.length];
   let t0: number | null = null;
@@ -44,7 +45,7 @@ function createFlail(seed: number, fallMs: number): AnimationFn {
     if (t0 === null) t0 = elapsed;
     const t = elapsed - t0;
     if (t <= 0 || t >= fallMs) return 0.5;
-    const s = (t / 1000) * DROP_FLAIL_SPEED * speed; // global knob × per-limb rate
+    const s = (t / 1000) * speedScale * speed; // overall rate knob × per-limb rate
     return 0.5 + 0.5 * Math.sin(2 * Math.PI * s + phase); // full [0,1] sweep
   };
 }

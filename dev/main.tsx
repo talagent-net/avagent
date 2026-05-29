@@ -83,7 +83,7 @@ const debugCapabilities: { key: string; rest: number }[] = [
   { key: "antenna.wiggle", rest: 0.5 },
 ];
 // Gesture actions fire with a fixed spec; walk takes direction + distance (body-widths).
-const gestures: ActionSpec[] = [{ name: "disagree" }, { name: "agree" }];
+const gestures: ActionSpec[] = [{ name: "disagree" }, { name: "agree" }, { name: "greet" }];
 
 function App() {
   const [themeName, setThemeName] = useState("default");
@@ -265,6 +265,13 @@ function App() {
           style={{ padding: "6px 14px", fontSize: 14, cursor: "pointer" }}
         >
           drop ↓
+        </button>
+        <button
+          type="button"
+          onClick={() => fireAction({ name: "jump" })}
+          style={{ padding: "6px 14px", fontSize: 14, cursor: "pointer" }}
+        >
+          jump ↑
         </button>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#666", width: "100%" }}>
           <span style={{ width: 60 }}>Distance</span>

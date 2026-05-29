@@ -3,9 +3,11 @@ import { createShakeHeadAnimation, SHAKE_HEAD_DURATION_MS } from "./shakeHead";
 import { createNodHeadAnimation, NOD_HEAD_DURATION_MS } from "./nodHead";
 import { createRaiseHandAnimation, RAISE_HAND_DURATION_MS } from "./raiseHand";
 import { createWaveHandAnimation } from "./waveHand";
+import { createGreetHeadBobAnimation } from "./greetHeadBob";
 import { createWalk } from "./walk";
 import type { WalkDirection } from "./walk";
 import { createDrop } from "./drop";
+import { createJump } from "./jump";
 
 // An action is a top-level one-shot: it composes parallel body-part animations under one
 // duration, then mode resumes. Animations are keyed by capability so they slot into the
@@ -40,6 +42,21 @@ export type Action = {
     offsetBodyWidths: number;
     fallMs: number;
   };
+  // Present only for `jump`: the vertical hop. The component drives body.y as a symmetric parabola
+  // (0 → -peak apex → 0) over `airMs`, starting `airStartMs` into the action (after the anticipation
+  // crouch). No net displacement — Tally returns to the anchor.
+  ascent?: {
+    peakBodyWidths: number;
+    airStartMs: number;
+    airMs: number;
+  };
+  // Window (ms, relative to action start) during which the four flail capabilities are driven; outside
+  // it they release to rest so the engine eases the limbs back. drop flails from t=0 to landing; jump
+  // flails only while airborne. Both end the window the moment the landing crouch begins.
+  flailWindow?: {
+    startMs: number;
+    endMs: number;
+  };
 };
 
 // Actions are triggered by a spec object rather than a bare name, because some actions take
@@ -54,7 +71,9 @@ export type ActionSpec =
   | { name: "agree" }
   | { name: "walk"; direction: WalkDirection; distance: number }
   | { name: "come"; direction: WalkDirection; distance: number }
-  | { name: "drop"; distance: number };
+  | { name: "drop"; distance: number }
+  | { name: "jump" }
+  | { name: "greet" };
 
 export type ActionName = ActionSpec["name"];
 
@@ -78,6 +97,18 @@ export function createAction(spec: ActionSpec): Action {
         duration: NOD_HEAD_DURATION_MS,
         animations: {
           "head.tilt": createNodHeadAnimation(),
+        },
+      };
+    case "greet":
+      // Like disagree minus the head shake: raise the hand and wave it (forearm) while the head
+      // bobs gently side-to-side, then everything settles back to rest. The hand stays raised
+      // (RAISE_HAND_DURATION_MS) past the shorter wave/bob, exactly like disagree.
+      return {
+        duration: RAISE_HAND_DURATION_MS,
+        animations: {
+          "arms.left.raise": createRaiseHandAnimation(),
+          "arms.left.wave": createWaveHandAnimation(),
+          "head.bob": createGreetHeadBobAnimation(),
         },
       };
     case "walk": {
@@ -123,6 +154,18 @@ export function createAction(spec: ActionSpec): Action {
         duration: d.duration,
         animations: d.animations,
         descent: { offsetBodyWidths: d.offsetBodyWidths, fallMs: d.fallMs },
+        flailWindow: { startMs: 0, endMs: d.fallMs }, // flail the whole fall; release at landing
+      };
+    }
+    case "jump": {
+      // Vertical hop, no net displacement: anticipation crouch → spring → parabolic arc → partial
+      // landing crouch. Fixed height (knob lives in jump.ts). Flail applies only while airborne.
+      const j = createJump();
+      return {
+        duration: j.duration,
+        animations: j.animations,
+        ascent: { peakBodyWidths: j.peakBodyWidths, airStartMs: j.airStartMs, airMs: j.airMs },
+        flailWindow: { startMs: j.flailStartMs, endMs: j.flailEndMs },
       };
     }
   }

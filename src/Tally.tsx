@@ -240,19 +240,32 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   });
   useCapabilityAnimation(BODY_X_KEY, bodyXAnimRef.current);
 
-  // Vertical free-fall (drop). Mirror of body.x but transient: Tally starts `offset` px above the
-  // anchor and falls to it with a GRAVITY profile — position = -offset·(1 − (t/fallMs)²), so the
-  // speed ramps up (no decel) and stops hard at the anchor (the landing crouch absorbs it). body.y
-  // rests at 0 (anchor) whenever no fall is in progress; the action never commits any net offset.
-  const fallStateRef = useRef<{ startElapsed: number | null; offset: number; fallMs: number } | null>(null);
+  // Transient vertical motion (drop & jump). Mirror of body.x but it never commits a net offset —
+  // body.y rests at 0 (the anchor) whenever nothing is in flight. Two profiles:
+  //   "fall" (drop): starts `offset` px ABOVE the anchor and falls to it with a GRAVITY profile,
+  //     -offset·(1 − (t/fallMs)²) — speed ramps up (no decel), hard stop at the anchor.
+  //   "jump": planted through the anticipation crouch, then a symmetric parabola over the air phase,
+  //     -4·peak·u·(1−u) with u = (t − airStartMs)/airMs — i.e. 0 → -peak (apex) → 0: decelerating up,
+  //     accelerating down. Planted again once it lands.
+  const verticalRef = useRef<
+    | { kind: "fall"; startElapsed: number | null; offset: number; fallMs: number }
+    | { kind: "jump"; startElapsed: number | null; peak: number; airStartMs: number; airMs: number }
+    | null
+  >(null);
   const bodyYAnimRef = useRef<AnimationFn>((elapsed) => {
-    const f = fallStateRef.current;
-    if (!f) return 0;
-    if (f.startElapsed === null) f.startElapsed = elapsed;
-    const t = elapsed - f.startElapsed;
-    if (t >= f.fallMs) return 0; // landed on the anchor
-    const p = t / f.fallMs;
-    return -f.offset * (1 - p * p); // accelerating descent from -offset (above) to 0
+    const v = verticalRef.current;
+    if (!v) return 0;
+    if (v.startElapsed === null) v.startElapsed = elapsed;
+    const t = elapsed - v.startElapsed;
+    if (v.kind === "fall") {
+      if (t >= v.fallMs) return 0; // landed on the anchor
+      const p = t / v.fallMs;
+      return -v.offset * (1 - p * p); // accelerating descent from -offset (above) to 0
+    }
+    const at = t - v.airStartMs; // time since the air phase began
+    if (at <= 0 || at >= v.airMs) return 0; // planted (anticipation) or landed
+    const u = at / v.airMs;
+    return -4 * v.peak * u * (1 - u); // symmetric parabola: 0 → -peak (apex) → 0
   });
   useCapabilityAnimation(BODY_Y_KEY, bodyYAnimRef.current);
   const locomotionRef = useLocomotionRef();
@@ -275,10 +288,11 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   const activate = useCallback((spec: ActionSpec | null) => {
     setActive(spec ? { spec, id: ++activationCounterRef.current } : null);
   }, []);
-  // Drop only: flips true at fallMs (when the landing crouch begins) so the flail animations are
-  // dropped — the engine then eases each limb from its flail pose back to rest (its normal
-  // release), while the crouch keeps playing. Reset to false at the start of every action.
-  const [flailReleased, setFlailReleased] = useState(false);
+  // True only while inside an action's flail window (drop & jump). When it flips false — at the
+  // moment the landing crouch begins — the flail animations are dropped, so the engine eases each
+  // limb from its flail pose back to rest (its normal release) while the crouch keeps playing.
+  // Reset to false at the start of every action; armed by the action's `flailWindow`.
+  const [flailActive, setFlailActive] = useState(false);
   // Latest-value ref so the prop effect can read whether an action is in flight without a stale
   // closure (written during render — see debugOverridesRef).
   const activeRef = useRef(active);
@@ -311,15 +325,27 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
       walkDelta = sign * travelBodyWidths * BODY_W * scale;
       walkStateRef.current = { startElapsed: null, delta: walkDelta, rampStartMs, rampEndMs, accelMs, arrive };
     }
-    // Flail applies during the fall; reset the release flag for this action.
-    setFlailReleased(false);
-    let fallTimer: ReturnType<typeof setTimeout> | undefined;
-    // drop: arm the vertical free-fall (transient; lands on the anchor, commits nothing). When the
-    // fall finishes (landing crouch begins) release the flail so the engine eases the limbs to rest.
+    // Flail window (drop & jump): drive the four flail caps only within [startMs, endMs]; reset the
+    // flag for this action, then arm on/off timers. drop flails from t=0; jump only once airborne.
+    // When the window ends (landing crouch begins) the flail releases and the engine eases the limbs
+    // back to rest — see flailActive.
+    setFlailActive(false);
+    let flailOnTimer: ReturnType<typeof setTimeout> | undefined;
+    let flailOffTimer: ReturnType<typeof setTimeout> | undefined;
+    if (activeAction.flailWindow) {
+      const { startMs, endMs } = activeAction.flailWindow;
+      if (startMs <= 0) setFlailActive(true);
+      else flailOnTimer = setTimeout(() => setFlailActive(true), startMs);
+      flailOffTimer = setTimeout(() => setFlailActive(false), endMs);
+    }
+    // Vertical (transient; returns to the anchor, commits nothing): drop falls onto the anchor, jump
+    // hops off it and back. Anchored at this action's start elapsed inside bodyYAnimRef.
     if (activeAction.descent) {
       const { offsetBodyWidths, fallMs } = activeAction.descent;
-      fallStateRef.current = { startElapsed: null, offset: offsetBodyWidths * BODY_W * scale, fallMs };
-      fallTimer = setTimeout(() => setFlailReleased(true), fallMs);
+      verticalRef.current = { kind: "fall", startElapsed: null, offset: offsetBodyWidths * BODY_W * scale, fallMs };
+    } else if (activeAction.ascent) {
+      const { peakBodyWidths, airStartMs, airMs } = activeAction.ascent;
+      verticalRef.current = { kind: "jump", startElapsed: null, peak: peakBodyWidths * BODY_W * scale, airStartMs, airMs };
     }
     const timer = setTimeout(() => {
       if (activeAction.locomotion) {
@@ -327,7 +353,7 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
         walkStateRef.current = null;
         onWalkComplete?.(arrive ? 0 : walkDelta);
       }
-      if (activeAction.descent) fallStateRef.current = null; // back at the anchor
+      if (activeAction.descent || activeAction.ascent) verticalRef.current = null; // back at the anchor
 
       // Dequeue: play the queued action next if present, otherwise go idle.
       const next = queuedActionSpecRef.current;
@@ -336,7 +362,8 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
     }, activeAction.duration);
     return () => {
       clearTimeout(timer);
-      if (fallTimer) clearTimeout(fallTimer);
+      if (flailOnTimer) clearTimeout(flailOnTimer);
+      if (flailOffTimer) clearTimeout(flailOffTimer);
     };
   }, [activeAction, scale, onWalkComplete, activate]);
 
@@ -418,16 +445,17 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   }, [activeAction, debugAnimFor]);
   useCapabilityAnimation(ARMS_STRIDE_KEY, armsStrideAnimation);
 
-  // Per-limb flail (drop) — action > debug. Four independent capabilities.
-  // Each flail: the action drives it during the fall; once flailReleased (landing crouch begins)
-  // it falls through to debug/null so the engine eases the limb from its flail pose back to rest.
-  const armsLeftFlailAnimation = useMemo(() => (!flailReleased && activeAction?.animations[ARMS_LEFT_FLAIL_KEY]) || debugAnimFor(ARMS_LEFT_FLAIL_KEY), [activeAction, debugAnimFor, flailReleased]);
+  // Per-limb flail (drop & jump) — action > debug. Four independent capabilities.
+  // Each flail is driven only while flailActive (inside the action's flail window); when the window
+  // ends (landing crouch begins) it falls through to debug/null so the engine eases the limb from
+  // its flail pose back to rest.
+  const armsLeftFlailAnimation = useMemo(() => (flailActive && activeAction?.animations[ARMS_LEFT_FLAIL_KEY]) || debugAnimFor(ARMS_LEFT_FLAIL_KEY), [activeAction, debugAnimFor, flailActive]);
   useCapabilityAnimation(ARMS_LEFT_FLAIL_KEY, armsLeftFlailAnimation);
-  const armsRightFlailAnimation = useMemo(() => (!flailReleased && activeAction?.animations[ARMS_RIGHT_FLAIL_KEY]) || debugAnimFor(ARMS_RIGHT_FLAIL_KEY), [activeAction, debugAnimFor, flailReleased]);
+  const armsRightFlailAnimation = useMemo(() => (flailActive && activeAction?.animations[ARMS_RIGHT_FLAIL_KEY]) || debugAnimFor(ARMS_RIGHT_FLAIL_KEY), [activeAction, debugAnimFor, flailActive]);
   useCapabilityAnimation(ARMS_RIGHT_FLAIL_KEY, armsRightFlailAnimation);
-  const legsLeftFlailAnimation = useMemo(() => (!flailReleased && activeAction?.animations[LEGS_LEFT_FLAIL_KEY]) || debugAnimFor(LEGS_LEFT_FLAIL_KEY), [activeAction, debugAnimFor, flailReleased]);
+  const legsLeftFlailAnimation = useMemo(() => (flailActive && activeAction?.animations[LEGS_LEFT_FLAIL_KEY]) || debugAnimFor(LEGS_LEFT_FLAIL_KEY), [activeAction, debugAnimFor, flailActive]);
   useCapabilityAnimation(LEGS_LEFT_FLAIL_KEY, legsLeftFlailAnimation);
-  const legsRightFlailAnimation = useMemo(() => (!flailReleased && activeAction?.animations[LEGS_RIGHT_FLAIL_KEY]) || debugAnimFor(LEGS_RIGHT_FLAIL_KEY), [activeAction, debugAnimFor, flailReleased]);
+  const legsRightFlailAnimation = useMemo(() => (flailActive && activeAction?.animations[LEGS_RIGHT_FLAIL_KEY]) || debugAnimFor(LEGS_RIGHT_FLAIL_KEY), [activeAction, debugAnimFor, flailActive]);
   useCapabilityAnimation(LEGS_RIGHT_FLAIL_KEY, legsRightFlailAnimation);
 
   // body.crouch — action > debug. No mode-level idle; no action drives it yet (debug-scrubbable).
