@@ -81,6 +81,8 @@ const debugCapabilities: { key: string; rest: number }[] = [
   { key: "legs.right.flail", rest: 0.5 },
   { key: "arms.left.raise", rest: 0 },
   { key: "arms.left.wave", rest: 0.5 },
+  { key: "arms.right.raise", rest: 0 },
+  { key: "arms.right.wave", rest: 0.5 },
   { key: "antenna.wiggle", rest: 0.5 },
 ];
 // Gesture actions fire with a fixed spec; walk takes direction + distance (body-widths).

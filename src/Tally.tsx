@@ -15,6 +15,8 @@ const HEAD_TURN_KEY = "head.turn";
 const HEAD_TILT_KEY = "head.tilt";
 const ARMS_LEFT_RAISE_KEY = "arms.left.raise";
 const ARMS_LEFT_WAVE_KEY = "arms.left.wave";
+const ARMS_RIGHT_RAISE_KEY = "arms.right.raise";
+const ARMS_RIGHT_WAVE_KEY = "arms.right.wave";
 const ANTENNA_WIGGLE_KEY = "antenna.wiggle";
 const BODY_TURN_KEY = "body.turn";
 // upper-body twist: an OFFSET on body.turn that turns only the upper half — the body face foreshortens
@@ -96,8 +98,8 @@ const TRACK_HEAD_ABOVE_ANCHOR = 125; // unscaled px the head center sits above t
 const TRACK_TURN_RANGE_BW = 6;       // cursor horizontal distance (body-widths) for full turn deflection
 const TRACK_TILT_RANGE_BW = 4;       // cursor vertical distance (body-widths) for full tilt deflection
 const TRACK_TURN_MAX = 0.15;          // max effective head turn from 0.5 (0.5 = full sideways profile; <0.5 keeps the face visible)
-const TRACK_TILT_MAX = 0.3;          // max |head.tilt − 0.5| (input range; head.tilt is softened again at render)
-const TRACK_BODY_TURN_FRACTION = 0.3; // share of the head's turn carried by a slight body.turn (the rest stays a head offset)
+const TRACK_TILT_MAX = 0.2;          // max |head.tilt − 0.5| (input range; head.tilt is softened again at render)
+const TRACK_BODY_TURN_FRACTION = .64; // share of the head's turn carried by a slight body.turn (the rest stays a head offset)
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
 export interface ColorTheme {
@@ -158,6 +160,8 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   useCapability(HEAD_TILT_KEY, 0.5); // 0.5 = looking straight, 0 = looking down, 1 = looking up
   useCapability(ARMS_LEFT_RAISE_KEY, 0); // 0 = arm at rest pose; 1 = raised to a "stop" gesture
   useCapability(ARMS_LEFT_WAVE_KEY, 0.5);// 0.5 = no wave; 0/1 = forearm rotated left/right at the elbow
+  useCapability(ARMS_RIGHT_RAISE_KEY, 0); // right-arm mirror of arms.left.raise
+  useCapability(ARMS_RIGHT_WAVE_KEY, 0.5);// right-arm mirror of arms.left.wave
   useCapability(ANTENNA_WIGGLE_KEY, 0.5); // 0.5 = no wiggle; 0/1 = max wiggle in either direction
   useCapability(BODY_TURN_KEY, 0.5); // 0.5 = facing forward; 0/1 = max body turn either way (head follows by default)
   useCapability(UPPERBODY_TURN_KEY, 0.5); // 0.5 = square; offset on body.turn that twists only the upper body
@@ -403,8 +407,17 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   // and the head settles cleanly during the action, with no leftover slide-in-progress when
   // the action ends. lookAround is also null in debug mode, so the null-fallback below acts
   // as "no ambient in debug mode" for these capabilities.
+  // Idle look-around reuses track's ability ranges (turn/tilt) + the upper-body split, so the head
+  // (and a slight upper-body twist) wanders the same way it follows the cursor, plus its own bob.
   const lookAround = useMemo(
-    () => (mode === "hangout" && !activeAction ? createLookAroundAnimation() : null),
+    () =>
+      mode === "hangout" && !activeAction
+        ? createLookAroundAnimation({
+            turnMax: TRACK_TURN_MAX,
+            tiltMax: TRACK_TILT_MAX,
+            upperFraction: TRACK_BODY_TURN_FRACTION,
+          })
+        : null,
     [mode, activeAction],
   );
 
@@ -455,13 +468,13 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   }, [activeAction, debugAnimFor, follow, lookAround]);
   useCapabilityAnimation(HEAD_TURN_KEY, headTurnAnimation);
 
-  // head.tilt — action > debug > track-mode cursor follow. No hangout idle.
+  // head.tilt — action > debug > track follow > hangout look-around. (Idle now also tilts up/down.)
   const headTiltAnimation = useMemo(() => {
     if (activeAction?.animations[HEAD_TILT_KEY]) return activeAction.animations[HEAD_TILT_KEY];
     const dbg = debugAnimFor(HEAD_TILT_KEY);
     if (dbg) return dbg;
-    return follow?.headTilt ?? null;
-  }, [activeAction, debugAnimFor, follow]);
+    return follow?.headTilt ?? lookAround?.headTilt ?? null;
+  }, [activeAction, debugAnimFor, follow, lookAround]);
   useCapabilityAnimation(HEAD_TILT_KEY, headTiltAnimation);
 
   // body.turn (full turn — hips + legs included) — action > debug. No mode-level idle; the body stays
@@ -480,8 +493,8 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
     if (activeAction?.animations[UPPERBODY_TURN_KEY]) return activeAction.animations[UPPERBODY_TURN_KEY];
     const dbg = debugAnimFor(UPPERBODY_TURN_KEY);
     if (dbg) return dbg;
-    return follow?.upperTurn ?? null;
-  }, [activeAction, debugAnimFor, follow]);
+    return follow?.upperTurn ?? lookAround?.upperTurn ?? null;
+  }, [activeAction, debugAnimFor, follow, lookAround]);
   useCapabilityAnimation(UPPERBODY_TURN_KEY, upperBodyTurnAnimation);
 
   // body.bounce + body.lean — gait capabilities driven only by a walk action (or debug). No
@@ -1511,16 +1524,21 @@ function useArmRef(scale: number, side: "left" | "right") {
       const flailMag = ARM_FLAIL_MIN + armFlailCap * (ARM_FLAIL_MAX - ARM_FLAIL_MIN);
       const flailDelta = (isLeft ? 1 : -1) * (flailMag - LEFT_UPPER_ANGLE);
 
-      // arms.left.raise — left arm only; the "stop" gesture composes on top of the rest pose.
-      const raise = isLeft ? (caps.get(ARMS_LEFT_RAISE_KEY) ?? 0) : 0;
+      // arms.*.raise — the "stop" gesture composes on top of the rest pose. Per-side capability;
+      // the raise delta is computed from the LEFT convention and sign-flipped for the right so the
+      // arms mirror (same pattern as flail/crouch above).
+      const raise = caps.get(isLeft ? ARMS_LEFT_RAISE_KEY : ARMS_RIGHT_RAISE_KEY) ?? 0;
+      const mirror = isLeft ? 1 : -1;
       const restUpper = isLeft ? LEFT_UPPER_ANGLE : RIGHT_UPPER_ANGLE;
       const restLower = isLeft ? LEFT_LOWER_ANGLE : RIGHT_LOWER_ANGLE;
-      const upperAngle = restUpper + raise * (LEFT_UPPER_RAISED_ANGLE - LEFT_UPPER_ANGLE) + swingDelta + crouchUpperDelta + flailDelta;
-      // arms.left.wave — left arm only; rotates the FOREARM about the elbow (upper arm/elbow stay
-      // put), waving the hand side to side. Composes on top of the raised forearm angle.
-      const wave = isLeft ? (caps.get(ARMS_LEFT_WAVE_KEY) ?? 0.5) : 0.5;
-      const waveDelta = (wave - 0.5) * 2 * HAND_WAVE_DEG;
-      const lowerAngle = restLower + raise * (LEFT_LOWER_RAISED_ANGLE - LEFT_LOWER_ANGLE) + waveDelta + crouchLowerDelta;
+      const raiseUpperDelta = mirror * raise * (LEFT_UPPER_RAISED_ANGLE - LEFT_UPPER_ANGLE);
+      const upperAngle = restUpper + raiseUpperDelta + swingDelta + crouchUpperDelta + flailDelta;
+      // arms.*.wave — rotates the FOREARM about the elbow (upper arm/elbow stay put), waving the hand
+      // side to side. Composes on top of the raised forearm angle; mirrored on the right.
+      const wave = caps.get(isLeft ? ARMS_LEFT_WAVE_KEY : ARMS_RIGHT_WAVE_KEY) ?? 0.5;
+      const waveDelta = mirror * (wave - 0.5) * 2 * HAND_WAVE_DEG;
+      const raiseLowerDelta = mirror * raise * (LEFT_LOWER_RAISED_ANGLE - LEFT_LOWER_ANGLE);
+      const lowerAngle = restLower + raiseLowerDelta + waveDelta + crouchLowerDelta;
 
       for (let i = 0; i < el.children.length; i++) {
         const upper = el.children[i] as HTMLElement;

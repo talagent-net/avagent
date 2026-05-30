@@ -80,9 +80,12 @@ export function createAction(spec: ActionSpec): Action {
         duration: Math.max(SHAKE_HEAD_DURATION_MS, RAISE_HAND_DURATION_MS),
         animations: {
           "head.turn": createShakeHeadAnimation(),
+          // Both hands raise and wave (forearm at the elbow) in sync with the head shake; the right
+          // arm mirrors the left (the renderer sign-flips the right side).
           "arms.left.raise": createRaiseHandAnimation(),
-          // The raised hand waves left/right (forearm at the elbow) in sync with the head shake.
           "arms.left.wave": createWaveHandAnimation(),
+          "arms.right.raise": createRaiseHandAnimation(),
+          "arms.right.wave": createWaveHandAnimation(),
         },
       };
     case "agree":
