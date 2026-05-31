@@ -34,6 +34,10 @@ export type LookAroundConfig = {
   turnMax: number;       // max effective head turn from 0.5
   tiltMax: number;       // max head.tilt from 0.5
   upperFraction: number; // share of the turn carried by a slight upperbody.turn (rest stays a head offset)
+  // Optional pose to START from, captured lazily on the first tick (so capabilities are registered
+  // and hold their live values by then). Lets idle continue from wherever the head currently is —
+  // e.g. the frozen `connecting` pose — instead of snapping to neutral. Defaults to neutral.
+  getInitialPose?: () => { turn: number; upper: number; tilt: number; bob: number };
 };
 
 export type LookAroundAnimation = {
@@ -44,7 +48,7 @@ export type LookAroundAnimation = {
 };
 
 export function createLookAroundAnimation(config: LookAroundConfig): LookAroundAnimation {
-  const { turnMax, tiltMax, upperFraction } = config;
+  const { turnMax, tiltMax, upperFraction, getInitialPose } = config;
 
   // Start in hold at neutral. The first slide kicks in after the initial hold expires.
   let phase: Phase = "hold";
@@ -76,10 +80,19 @@ export function createLookAroundAnimation(config: LookAroundConfig): LookAroundA
     if (elapsed === lastElapsed) return;
     lastElapsed = elapsed;
 
-    // Lazy-init so the first hold is measured from when the animation actually starts running.
+    // Lazy-init so the first hold is measured from when the animation actually starts running, and
+    // (optionally) so the first hold dwells at the CURRENT pose rather than neutral — then the
+    // first slide eases away from there, so there's no snap when idle takes over a held pose.
     if (phaseStartedAt === null) {
       phaseStartedAt = elapsed;
       phaseDuration = randRange(MIN_HOLD_MS, MAX_HOLD_MS);
+      if (getInitialPose) {
+        const p = getInitialPose();
+        fromTurn = toTurn = curTurn = p.turn;
+        fromUpper = toUpper = curUpper = p.upper;
+        fromTilt = toTilt = curTilt = p.tilt;
+        fromBob = toBob = curBob = p.bob;
+      }
     }
 
     const t = (elapsed - phaseStartedAt) / phaseDuration;

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { colors as defaultColors } from "./colors";
-import { AnimationProvider, useAnimationRenderer, useCapability, useCapabilityAnimation } from "./animation/context";
+import { AnimationProvider, useAnimationRenderer, useCapability, useCapabilityAnimation, useEngine } from "./animation/context";
 import { createBlinkAnimation } from "./animation/blink";
 import { createLookAroundAnimation } from "./animation/lookAround";
 import { createFollowAnimation, type FollowTarget } from "./animation/follow";
 import { createAntennaWiggleAnimation } from "./animation/antennaWiggle";
+import { createEyeSpinAnimation } from "./animation/eyeSpin";
 import { createAction } from "./animation/actions";
 import type { ActionSpec } from "./animation/actions";
 import type { AnimationFn } from "./animation/engine";
@@ -12,6 +13,7 @@ import { SpeechBubble, speechDurationMs, SPEECH_EXIT_MS, DEFAULT_FONT_FAMILY } f
 import type { SpeechSpec, SpeechSide } from "./speech";
 
 const BLINK_KEY = "eyes.blink";
+const EYE_SPIN_KEY = "eyes.spin"; // 0 = upright (rest); 0→1 sweeps a full 0→360° eye rotation (connecting mode)
 const HEAD_BOB_KEY = "head.bob";
 const HEAD_TURN_KEY = "head.turn";
 const HEAD_TILT_KEY = "head.tilt";
@@ -89,7 +91,7 @@ const effectiveUpperTurn = (caps: ReadonlyMap<string, number>): number => {
   return Math.max(0, Math.min(1, body + (upper - 0.5)));
 };
 
-export type Mode = "hangout" | "track" | "debug";
+export type Mode = "hangout" | "track" | "connecting" | "debug";
 
 // `track` mode: the head follows the cursor. The head's screen center sits ~TRACK_HEAD_ABOVE_ANCHOR
 // unscaled px above the anchor (BODY_BOTTOM + body height + HEAD_TOP − half the head) and the figure
@@ -174,6 +176,7 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
 
   // Capabilities — declared once at the root with their rest values.
   useCapability(BLINK_KEY, 1);      // 1 = fully open
+  useCapability(EYE_SPIN_KEY, 0);   // 0 = upright; connecting mode sweeps it 0→1 for a full eye rotation
   useCapability(HEAD_BOB_KEY, 0.5); // 0.5 = centered, 0 = max left tilt, 1 = max right tilt
   useCapability(HEAD_TURN_KEY, 0.5); // 0.5 = looking straight, 0 = looking left, 1 = looking right
   useCapability(HEAD_TILT_KEY, 0.5); // 0.5 = looking straight, 0 = looking down, 1 = looking up
@@ -216,6 +219,21 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
     (key: string): AnimationFn | null =>
       debugOverridesRef.current[key] !== undefined ? () => debugOverridesRef.current[key] : null,
     [debugKeysSig],
+  );
+
+  // makeFreeze installs a "hold current value" animation for a capability: on its first tick it
+  // captures whatever the engine currently has for that key and returns it forever. Used by
+  // `connecting` mode to FREEZE the head's ambient pose (turn/tilt/bob/upper-body) in place on
+  // entry — otherwise removing the hangout look-around animation would ease those capabilities back
+  // to rest (the head "straightening" the user didn't want). Capturing on the first tick (not at
+  // render) means it freezes the live pose at the moment the engine swaps animations.
+  const engine = useEngine();
+  const makeFreeze = useCallback(
+    (key: string): AnimationFn => {
+      let held: number | null = null;
+      return () => (held ??= engine.getCapability(key));
+    },
+    [engine],
   );
 
   // Persistent horizontal position. committedXRef is the net distance (scaled px) the figure has
@@ -410,15 +428,26 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
     };
   }, [activeAction, scale, onWalkComplete, activate]);
 
-  // eyes.blink — action > debug > (no ambient in debug mode) > hangout's random blinks.
+  // eyes.blink — action > debug > (no ambient in debug/connecting) > hangout's random blinks.
   const blinkAnimation = useMemo(() => {
     if (activeAction?.animations[BLINK_KEY]) return activeAction.animations[BLINK_KEY];
     const dbg = debugAnimFor(BLINK_KEY);
     if (dbg) return dbg;
     if (mode === "debug") return null;
+    if (mode === "connecting") return null; // eyes stay open while spinning
     return createBlinkAnimation();
   }, [activeAction, mode, debugAnimFor]);
   useCapabilityAnimation(BLINK_KEY, blinkAnimation);
+
+  // eyes.spin — debug > connecting mode's continuous full-turn spin. No action drives it; rests at
+  // 0 (upright) otherwise, so leaving connecting eases the eyes back to upright (release-to-rest).
+  const eyeSpinAnimation = useMemo(() => {
+    const dbg = debugAnimFor(EYE_SPIN_KEY);
+    if (dbg) return dbg;
+    if (mode === "connecting") return createEyeSpinAnimation();
+    return null;
+  }, [mode, debugAnimFor]);
+  useCapabilityAnimation(EYE_SPIN_KEY, eyeSpinAnimation);
 
 
   // head.turn + head.bob — action overrides if it touches either; otherwise hangout runs
@@ -435,9 +464,18 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
             turnMax: TRACK_TURN_MAX,
             tiltMax: TRACK_TILT_MAX,
             upperFraction: TRACK_BODY_TURN_FRACTION,
+            // Begin idle from the head's current pose (e.g. the frozen connecting pose, or a track
+            // gaze) so it continues from there instead of snapping to neutral. Read lazily on the
+            // first tick — see makeFreeze for why first-tick (not render-time) capture is correct.
+            getInitialPose: () => ({
+              turn: engine.getCapability(HEAD_TURN_KEY),
+              upper: engine.getCapability(UPPERBODY_TURN_KEY),
+              tilt: engine.getCapability(HEAD_TILT_KEY),
+              bob: engine.getCapability(HEAD_BOB_KEY),
+            }),
           })
         : null,
-    [mode, activeAction],
+    [mode, activeAction, engine],
   );
 
   // `track` mode: the head follows the cursor. The mousemove listener (attached only in track mode)
@@ -483,8 +521,9 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
     if (activeAction?.animations[HEAD_TURN_KEY]) return activeAction.animations[HEAD_TURN_KEY];
     const dbg = debugAnimFor(HEAD_TURN_KEY);
     if (dbg) return dbg;
+    if (mode === "connecting") return makeFreeze(HEAD_TURN_KEY); // hold the entry pose, don't recenter
     return follow?.headTurn ?? lookAround?.headTurn ?? null;
-  }, [activeAction, debugAnimFor, follow, lookAround]);
+  }, [activeAction, debugAnimFor, follow, lookAround, mode, makeFreeze]);
   useCapabilityAnimation(HEAD_TURN_KEY, headTurnAnimation);
 
   // head.tilt — action > debug > track follow > hangout look-around. (Idle now also tilts up/down.)
@@ -492,8 +531,9 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
     if (activeAction?.animations[HEAD_TILT_KEY]) return activeAction.animations[HEAD_TILT_KEY];
     const dbg = debugAnimFor(HEAD_TILT_KEY);
     if (dbg) return dbg;
+    if (mode === "connecting") return makeFreeze(HEAD_TILT_KEY);
     return follow?.headTilt ?? lookAround?.headTilt ?? null;
-  }, [activeAction, debugAnimFor, follow, lookAround]);
+  }, [activeAction, debugAnimFor, follow, lookAround, mode, makeFreeze]);
   useCapabilityAnimation(HEAD_TILT_KEY, headTiltAnimation);
 
   // body.turn (full turn — hips + legs included) — action > debug. No mode-level idle; the body stays
@@ -512,8 +552,9 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
     if (activeAction?.animations[UPPERBODY_TURN_KEY]) return activeAction.animations[UPPERBODY_TURN_KEY];
     const dbg = debugAnimFor(UPPERBODY_TURN_KEY);
     if (dbg) return dbg;
+    if (mode === "connecting") return makeFreeze(UPPERBODY_TURN_KEY);
     return follow?.upperTurn ?? lookAround?.upperTurn ?? null;
-  }, [activeAction, debugAnimFor, follow, lookAround]);
+  }, [activeAction, debugAnimFor, follow, lookAround, mode, makeFreeze]);
   useCapabilityAnimation(UPPERBODY_TURN_KEY, upperBodyTurnAnimation);
 
   // body.bounce + body.lean — gait capabilities driven only by a walk action (or debug). No
@@ -566,8 +607,9 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
     if (activeAction?.animations[HEAD_BOB_KEY]) return activeAction.animations[HEAD_BOB_KEY];
     const dbg = debugAnimFor(HEAD_BOB_KEY);
     if (dbg) return dbg;
+    if (mode === "connecting") return makeFreeze(HEAD_BOB_KEY);
     return lookAround?.headBob ?? null;
-  }, [activeAction, debugAnimFor, lookAround]);
+  }, [activeAction, debugAnimFor, lookAround, mode, makeFreeze]);
   useCapabilityAnimation(HEAD_BOB_KEY, headBobAnimation);
 
   // arms.left.raise — action > debug. No mode-level animation.
@@ -685,7 +727,7 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
             <RightEye scale={scale} theme={theme} />
             <LeftEar scale={scale} theme={theme} />
             <RightEar scale={scale} theme={theme} />
-            <Antenna scale={scale} theme={theme} showAnchor={showAnchor} />
+            <Antenna scale={scale} theme={theme} showAnchor={showAnchor} signal={mode === "connecting"} />
           </Head>
           <LeftArm scale={scale} theme={theme} showAnchor={showAnchor} />
           <RightArm scale={scale} theme={theme} showAnchor={showAnchor} />
@@ -1294,6 +1336,11 @@ function useEyeRefShared(scale: number, side: "left" | "right") {
       pupil.style.height = `${Math.max(0, eyeH - EYE_OFFSET_V) * scale}px`;
       pupil.style.width = `${Math.max(0, eyeW - EYE_OFFSET_H) * scale}px`;
     }
+
+    // eyes.spin (connecting mode) — rotate the whole eye around its own center. 0 = upright;
+    // a 0→1 sweep is one full turn. transform-origin defaults to the element center.
+    const spin = caps.get(EYE_SPIN_KEY) ?? 0;
+    el.style.transform = spin ? `rotate(${spin * 360}deg)` : "";
   }, [scale, side]);
   useAnimationRenderer(render);
   return ref;
@@ -1545,7 +1592,7 @@ function useAntennaRef(scale: number) {
   return ref;
 }
 
-function Antenna({ scale = 1, theme, showAnchor = false }: { scale: number; theme: ColorTheme; showAnchor?: boolean }) {
+function Antenna({ scale = 1, theme, showAnchor = false, signal = false }: { scale: number; theme: ColorTheme; showAnchor?: boolean; signal?: boolean }) {
   const s = (v: number) => v * scale;
   const antennaRef = useAntennaRef(scale);
 
@@ -1565,7 +1612,69 @@ function Antenna({ scale = 1, theme, showAnchor = false }: { scale: number; them
         transform: `rotate(${ANTENNA_ANGLE}deg)`,
       }}
     >
+      {/* Connecting-mode signal rings, anchored to the antenna tip so they ride its wiggle/turn. */}
+      {signal && <SignalWaves scale={scale} theme={theme} />}
       {showAnchor && <PivotMarker scale={scale} x={ANTENNA_W / 2} y={ANTENNA_H} />}
+    </div>
+  );
+}
+
+// Connecting-mode "signal" rings that radiate from near the antenna tip: concentric circles that
+// expand outward and fade, staggered so a fresh ripple leaves the tip continuously (a radar-ping /
+// broadcasting feel). Pure CSS keyframe loop (no capability) — rendered only while in connecting
+// mode. Positioned in Head coordinates near the antenna tip; the head is held calm in connecting
+// mode so a fixed emitter point tracks the tip well. Sits above the head face (zIndex) so the rings
+// read clearly instead of hiding behind it (unlike the antenna itself, which is behind the head).
+const SIGNAL_TIP_OFFSET = 0;   // emitter position along the antenna's top edge (unscaled px; negative = above the tip)
+const SIGNAL_RING_COUNT = 3;   // number of concurrent rings (staggered)
+const SIGNAL_PERIOD_MS = 1600; // one ring's full expand+fade cycle
+const SIGNAL_MIN = 8;          // ring diameter at emission (unscaled px)
+const SIGNAL_MAX = 52;         // ring diameter when fully expanded (unscaled px)
+const SIGNAL_THICKNESS = 3;    // ring line thickness (unscaled px) — CONSTANT as the ring expands
+
+// Rendered as a child of the Antenna, anchored at its tip (top-center, local coords), so the rings
+// inherit the antenna's transform and ride its wiggle/turn/tilt for free.
+function SignalWaves({ scale, theme }: { scale: number; theme: ColorTheme }) {
+  const s = (v: number) => v * scale;
+  const min = s(SIGNAL_MIN);
+  const max = s(SIGNAL_MAX);
+  // Grow via width/height (NOT transform: scale) so the border stays a constant SIGNAL_THICKNESS as
+  // the ring expands. A constant translate(-50%,-50%) keeps each ring centered on the emitter point
+  // at every size. fill-mode "both" holds the 0% keyframe (tiny + transparent) during the staggered
+  // start delay, so there's no full-size static ring before a ring's cycle begins.
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",                 // antenna's horizontal center
+        top: s(SIGNAL_TIP_OFFSET),   // the antenna's top edge = the tip
+        width: 0,
+        height: 0,
+        pointerEvents: "none",
+      }}
+    >
+      <style>{`@keyframes tally-signal {
+        0%   { width: ${min}px; height: ${min}px; opacity: 0; }
+        25%  { opacity: 0.85; }
+        100% { width: ${max}px; height: ${max}px; opacity: 0; }
+      }`}</style>
+      {Array.from({ length: SIGNAL_RING_COUNT }).map((_, i) => (
+        <div
+          key={i}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: max,
+            height: max,
+            border: `${s(SIGNAL_THICKNESS)}px solid ${theme.outline}`,
+            borderRadius: "50%",
+            boxSizing: "border-box",
+            transform: "translate(-50%, -50%)",
+            animation: `tally-signal ${SIGNAL_PERIOD_MS}ms linear ${(i * SIGNAL_PERIOD_MS) / SIGNAL_RING_COUNT}ms infinite both`,
+          }}
+        />
+      ))}
     </div>
   );
 }

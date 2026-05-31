@@ -61,11 +61,12 @@ const themes: Record<string, ColorTheme> = {
 };
 
 const scales = [.36, 0.5, 1, 1.5, 2, 2.5, 3, 3.5];
-const modes: Mode[] = ["hangout", "track", "debug"];
+const modes: Mode[] = ["hangout", "track", "connecting", "debug"];
 // Each debug capability with its rest value — toggling a capability on starts it at rest (no
 // visual jump) so you can then scrub from there. Multiple can be engaged at once.
 const debugCapabilities: { key: string; rest: number }[] = [
   { key: "eyes.blink", rest: 1 },
+  { key: "eyes.spin", rest: 0 },
   { key: "head.bob", rest: 0.5 },
   { key: "head.turn", rest: 0.5 },
   { key: "head.tilt", rest: 0.5 },
