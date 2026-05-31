@@ -1,7 +1,7 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Tally } from "../src";
-import type { ColorTheme, Mode, ActionSpec } from "../src";
+import type { ColorTheme, Mode, ActionSpec, SpeechSpec, SpeechSide } from "../src";
 import openclaw from "./openclaw.png";
 import claudecode from "./claudecode.png";
 import codex from "./codex.png";
@@ -98,6 +98,9 @@ function App() {
   const [logoName, setLogoName] = useState<string>("openclaw");
   const [action, setAction] = useState<ActionSpec | null>(null);
   const [walkDistance, setWalkDistance] = useState(2); // body-widths per walk press
+  const [speech, setSpeech] = useState<SpeechSpec | null>(null);
+  const [speechText, setSpeechText] = useState("Peter is the best web application engineer with agentic skills that money can buy!");
+  const [speechSide, setSpeechSide] = useState<SpeechSide>("auto");
 
   // Toggle a capability override on (pinned at its rest value) or off. Engaged capabilities
   // hold independently, so you can pin several at once.
@@ -116,6 +119,12 @@ function App() {
   const fireAction = (spec: ActionSpec) => {
     setAction(null);
     setTimeout(() => setAction(spec), 50);
+  };
+
+  // Same null-bounce as actions so identical text re-fires.
+  const fireSpeech = () => {
+    setSpeech(null);
+    setTimeout(() => setSpeech({ text: speechText, side: speechSide }), 50);
   };
 
   return (
@@ -291,6 +300,33 @@ function App() {
           <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 36 }}>{walkDistance.toFixed(1)}</span>
         </label>
       </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 14, color: "#666", width: "100%" }}>Say:</span>
+        <input
+          type="text"
+          value={speechText}
+          onChange={(e) => setSpeechText(e.target.value)}
+          placeholder="What should Tally say?"
+          style={{ flex: 1, minWidth: 160, padding: "6px 8px", fontSize: 14 }}
+        />
+        <select
+          value={speechSide}
+          onChange={(e) => setSpeechSide(e.target.value as SpeechSide)}
+          style={{ padding: "4px 8px" }}
+        >
+          <option value="auto">auto</option>
+          <option value="left">left</option>
+          <option value="right">right</option>
+        </select>
+        <button
+          type="button"
+          onClick={fireSpeech}
+          disabled={speechText.length === 0}
+          style={{ padding: "6px 14px", fontSize: 14, cursor: "pointer" }}
+        >
+          say
+        </button>
+      </div>
       </div>
 
       {/* Right: demo space */}
@@ -312,6 +348,7 @@ function App() {
           chestImage={logos[logoName]}
           debugOverrides={overrides}
           action={action}
+          speech={speech}
         />
       </div>
     </div>

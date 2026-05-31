@@ -1,0 +1,175 @@
+import type { ColorTheme } from "./Tally";
+
+// `say` is an OVERLAY, not a body-part action. Unlike the entries in ActionSpec it doesn't drive
+// any 0..1 capability and it doesn't occupy the (single, non-interruptible) action slot — it rides
+// on top of whatever Tally is already doing (idle look-around, cursor tracking, a gesture mid-flight)
+// as a separate channel, then times itself out. So it gets its own prop (`speech`) and its own
+// little lifecycle in Tally, parallel to the action lifecycle, rather than a slot in createAction.
+
+// "auto" picks left/right at show-time from the figure's horizontal position in the viewport (it
+// opens toward the roomier side — figure on the left half of the screen → bubble opens right).
+// Tally resolves "auto" to a concrete side before rendering the bubble.
+export type SpeechSide = "left" | "right" | "auto";
+
+// Default font stack for the bubble text. References IBM Plex Sans (the consumer app's paragraph
+// font) WITHOUT bundling it: if the host app already loads Plex the bubble matches automatically,
+// otherwise it falls back cleanly to the system UI font. Consumers override via theme.fontFamily.
+export const DEFAULT_FONT_FAMILY = '"IBM Plex Sans", system-ui, -apple-system, sans-serif';
+
+export type SpeechSpec = {
+  text: string;
+  // Which side of Tally the bubble sits on; the tail always points back toward the head. Defaults
+  // to "auto" (open toward the roomier side based on the figure's position in the viewport).
+  side?: SpeechSide;
+};
+
+// Read-time-proportional display duration. A short base (time to notice the bubble at all) plus a
+// per-character reading budget, clamped so one word doesn't flash by and a paragraph doesn't hang
+// forever. ~55ms/char ≈ a relaxed 200-ish wpm — generous, since the reader also has to find the
+// bubble first.
+const SPEECH_BASE_MS = 1200;
+const SPEECH_PER_CHAR_MS = 55;
+const SPEECH_MIN_MS = 1800;
+const SPEECH_MAX_MS = 9000;
+export function speechDurationMs(text: string): number {
+  const raw = SPEECH_BASE_MS + text.length * SPEECH_PER_CHAR_MS;
+  return Math.max(SPEECH_MIN_MS, Math.min(SPEECH_MAX_MS, raw));
+}
+
+// Geometry (unscaled px, multiplied by `scale` at render). The figure is centered on x=0 and the
+// head's center sits ~SPEECH_CENTER_ABOVE_ANCHOR above the anchor with a half-width of
+// SPEECH_HEAD_HALF_W — so the bubble's inner edge is parked SPEECH_GAP beyond the head's side, the
+// tail diamond straddling that edge to point back at the head.
+const SPEECH_HEAD_HALF_W = 66;   // (HEAD_W + HEAD_OFFSET) / 2 in Tally
+const SPEECH_CENTER_ABOVE_ANCHOR = 125; // head vertical center above the anchor (matches TRACK_HEAD_ABOVE_ANCHOR)
+const SPEECH_GAP = 19;           // gap from the head's side edge to the bubble's inner edge
+const SPEECH_MAX_WIDTH = 180;    // bubble wraps past this content width
+const SPEECH_PAD_V = 8;
+const SPEECH_PAD_H = 12;
+const SPEECH_RADIUS = 12;
+const SPEECH_FONT = 15;
+const SPEECH_BORDER = 4;
+const SPEECH_TAIL_LEN = 14;      // how far the tail protrudes from the bubble side toward the head
+const SPEECH_TAIL_HALF = 12;     // half the tail's base height (the base is flush against the bubble side)
+
+// Entrance/exit timing. The entrance uses an easeOutBack curve (overshoots past full size then
+// settles) for a springy "pop". The exit is a quick, subtle shrink-and-fade back toward Tally.
+const SPEECH_IN_MS = 240;
+const SPEECH_OUT_MS = 160;
+// Exported so Tally knows how long to keep the bubble mounted while the exit animation plays before
+// it unmounts (and fires onSpeechEnd).
+export const SPEECH_EXIT_MS = SPEECH_OUT_MS;
+
+export function SpeechBubble({
+  text,
+  side,
+  scale,
+  theme,
+  leaving = false,
+}: {
+  text: string;
+  side: "left" | "right"; // already resolved (Tally turns "auto" into a concrete side)
+  scale: number;
+  theme: ColorTheme;
+  leaving?: boolean; // when true, play the exit animation (Tally unmounts after SPEECH_EXIT_MS)
+}) {
+  const s = (v: number) => v * scale;
+  const offset = s(SPEECH_HEAD_HALF_W + SPEECH_GAP);
+
+  // The tail is a triangle whose flat BASE is flush against the bubble's inner side and whose apex
+  // points back at the head. It's drawn as two stacked CSS border-triangles: a larger outline-
+  // colored one flush at the bubble edge, then a slightly smaller white one shifted a border-width
+  // INTO the bubble — so the white fill bridges into the bubble interior (no seam) while the outline
+  // peeks out as a uniform border along the two slanted edges and the apex.
+  const B = s(SPEECH_BORDER * .75);
+  const L = s(SPEECH_TAIL_LEN);
+  const HH = s(SPEECH_TAIL_HALF);
+  const outlineTail: React.CSSProperties =
+    side === "left"
+      ? {
+          // base flush at the bubble's right edge, apex pointing right (toward the head)
+          position: "absolute", top: "50%", left: "100%", transform: "translateY(-50%)",
+          width: 0, height: 0,
+          borderTop: `${HH}px solid transparent`,
+          borderBottom: `${HH}px solid transparent`,
+          borderLeft: `${L}px solid ${theme.outline}`,
+        }
+      : {
+          // base flush at the bubble's left edge, apex pointing left (toward the head)
+          position: "absolute", top: "50%", right: "100%", transform: "translateY(-50%)",
+          width: 0, height: 0,
+          borderTop: `${HH}px solid transparent`,
+          borderBottom: `${HH}px solid transparent`,
+          borderRight: `${L}px solid ${theme.outline}`,
+        };
+  const fillTail: React.CSSProperties =
+    side === "left"
+      ? {
+          position: "absolute", top: "50%", left: `calc(100% - ${B}px)`, transform: "translateY(-50%)",
+          width: 0, height: 0,
+          borderTop: `${HH - B}px solid transparent`,
+          borderBottom: `${HH - B}px solid transparent`,
+          borderLeft: `${L - B}px solid #ffffff`,
+        }
+      : {
+          position: "absolute", top: "50%", right: `calc(100% - ${B}px)`, transform: "translateY(-50%)",
+          width: 0, height: 0,
+          borderTop: `${HH - B}px solid transparent`,
+          borderBottom: `${HH - B}px solid transparent`,
+          borderRight: `${L - B}px solid #ffffff`,
+        };
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: s(-SPEECH_CENTER_ABOVE_ANCHOR),
+        // Park the inner edge `offset` from center; the bubble grows away from the head, the tail
+        // toward it. translateY(-50%) centers the bubble on the head's vertical center; the entrance
+        // grows from the tail side (origin toward the head) so it reads as coming out of Tally.
+        ...(side === "left" ? { right: offset } : { left: offset }),
+        transform: "translateY(-50%)",
+        transformOrigin: side === "left" ? "right center" : "left center",
+        zIndex: 50, // above the whole figure (Body establishes its own stacking context below this)
+        // Size to the text's natural width, but wrap once it would exceed SPEECH_MAX_WIDTH. Without
+        // an explicit width an absolutely-positioned box is shrink-to-fit and collapses to one
+        // character per line; max-content sizes to the content and the cap forces normal wrapping.
+        width: "max-content",
+        maxWidth: s(SPEECH_MAX_WIDTH),
+        boxSizing: "border-box",
+        padding: `${s(SPEECH_PAD_V)}px ${s(SPEECH_PAD_H)}px`,
+        background: "#ffffff",
+        border: `${s(SPEECH_BORDER)}px solid ${theme.outline}`,
+        borderRadius: s(SPEECH_RADIUS),
+        color: theme.outline,
+        fontSize: s(SPEECH_FONT),
+        lineHeight: 1.3,
+        fontFamily: theme.fontFamily ?? DEFAULT_FONT_FAMILY,
+        fontWeight: 500,
+        whiteSpace: "normal",
+        overflowWrap: "break-word", // only break a single over-long token, not every word
+        textAlign: "center",
+        pointerEvents: "none",
+        userSelect: "none",
+        // Springy entrance (easeOutBack overshoots then settles); subtle shrink-and-fade exit. Both
+        // keep translateY(-50%) so vertical centering holds, and scale from the tail side (the
+        // bubble's transformOrigin) so it pops out of / retracts back toward Tally.
+        animation: leaving
+          ? `tally-speech-out ${SPEECH_OUT_MS}ms cubic-bezier(0.4, 0, 1, 1) forwards`
+          : `tally-speech-in ${SPEECH_IN_MS}ms cubic-bezier(0.34, 1.56, 0.64, 1) both`,
+      }}
+    >
+      <style>{`@keyframes tally-speech-in {
+        from { opacity: 0; transform: translateY(-50%) scale(0.4); }
+        to { opacity: 1; transform: translateY(-50%) scale(1); }
+      }
+      @keyframes tally-speech-out {
+        from { opacity: 1; transform: translateY(-50%) scale(1); }
+        to { opacity: 0; transform: translateY(-50%) scale(0.6); }
+      }`}</style>
+      {text}
+      <div style={outlineTail} />
+      <div style={fillTail} />
+    </div>
+  );
+}

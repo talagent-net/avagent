@@ -8,6 +8,8 @@ import { createAntennaWiggleAnimation } from "./animation/antennaWiggle";
 import { createAction } from "./animation/actions";
 import type { ActionSpec } from "./animation/actions";
 import type { AnimationFn } from "./animation/engine";
+import { SpeechBubble, speechDurationMs, SPEECH_EXIT_MS, DEFAULT_FONT_FAMILY } from "./speech";
+import type { SpeechSpec, SpeechSide } from "./speech";
 
 const BLINK_KEY = "eyes.blink";
 const HEAD_BOB_KEY = "head.bob";
@@ -108,6 +110,10 @@ export interface ColorTheme {
   primaryMidDark: string; // a tone between primary and primaryMid (lightness: primaryDark < primary < primaryMidDark < primaryMid)
   primaryMid: string;
   outline: string;
+  // Font stack for the speech-bubble text. Optional — defaults to a Plex-first system fallback
+  // (DEFAULT_FONT_FAMILY), referencing IBM Plex Sans without bundling it. The consumer's app is
+  // expected to load the actual font; this only names it.
+  fontFamily?: string;
 }
 
 export const defaultTheme: ColorTheme = {
@@ -116,6 +122,7 @@ export const defaultTheme: ColorTheme = {
   primaryMidDark: defaultColors.primaryMidDark,
   primaryMid: defaultColors.primaryMid,
   outline: "#2a2a2a",
+  fontFamily: DEFAULT_FONT_FAMILY,
 };
 
 export interface TallyProps {
@@ -138,6 +145,15 @@ export interface TallyProps {
   // Fired when a walk action finishes, reporting the net horizontal move in scaled pixels
   // (signed: positive = rightward). The figure retains this displacement.
   onWalkComplete?: (deltaPx: number) => void;
+  // A speech bubble shown next to the figure. This is an OVERLAY, independent of `action`: it
+  // rides on top of whatever Tally is doing (idle, tracking, mid-gesture) and times itself out
+  // after a read-proportional duration. Like `action`, it dedupes by value — to re-say identical
+  // text, set this to null then back. Setting it to null is a no-op for an in-flight bubble (the
+  // bubble dismisses on its own timer, not by clearing the prop). `side` defaults to "auto" (opens
+  // toward the roomier side based on the figure's horizontal position in the viewport).
+  speech?: SpeechSpec | null;
+  // Fired when a speech bubble finishes (times out and is removed).
+  onSpeechEnd?: () => void;
 }
 
 const BASE = {
@@ -153,7 +169,7 @@ export function Tally(props: TallyProps) {
   );
 }
 
-function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnchor = false, chestImage, debugOverrides, action, onWalkComplete }: TallyProps) {
+function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnchor = false, chestImage, debugOverrides, action, onWalkComplete, speech, onSpeechEnd }: TallyProps) {
   const s = (v: number) => v * scale;
 
   // Capabilities — declared once at the root with their rest values.
@@ -579,6 +595,56 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   }, [activeAction, mode, debugAnimFor]);
   useCapabilityAnimation(ANTENNA_WIGGLE_KEY, antennaWiggleAnimation);
 
+  // Speech overlay lifecycle — parallel to the action lifecycle above, but a separate channel: it
+  // doesn't touch any capability or the action slot, so the bubble coexists with whatever Tally is
+  // doing. The active bubble carries a per-fire `id` (so re-saying identical text remounts a fresh
+  // bubble with its entrance) and dedupes the prop by value, mirroring the action dedupe. A new
+  // speech replaces a still-showing one immediately.
+  const [activeSpeech, setActiveSpeech] = useState<{ text: string; side: "left" | "right"; id: number } | null>(null);
+  // Two-phase teardown so the bubble can play an exit animation: the read timer flips `leaving`
+  // true (the bubble switches to its exit animation), then after SPEECH_EXIT_MS it unmounts.
+  const [speechLeaving, setSpeechLeaving] = useState(false);
+  const lastSpeechKeyRef = useRef<string | null>(null);
+  const speechCounterRef = useRef(0);
+  const onSpeechEndRef = useRef(onSpeechEnd);
+  onSpeechEndRef.current = onSpeechEnd;
+  // Resolve "auto" to a concrete side from the figure's horizontal screen position. We measure the
+  // locomotion wrapper, NOT the root: the wrapper is a 0-size box that carries the body.x walk
+  // displacement, so its rect.left is the figure's CURRENT center on screen (the root stays pinned
+  // at the original anchor and wouldn't reflect where Tally walked to). If that's left of the
+  // viewport center, open the bubble to the right (the roomier side), and vice-versa. Resolved
+  // once, at show-time. Falls back to "left" if unmeasurable.
+  const resolveSide = useCallback((side: SpeechSide): "left" | "right" => {
+    if (side !== "auto") return side;
+    const el = locomotionRef.current;
+    if (!el || typeof window === "undefined") return "left";
+    return el.getBoundingClientRect().left < window.innerWidth / 2 ? "right" : "left";
+  }, []);
+  useEffect(() => {
+    const key = speech ? JSON.stringify(speech) : null;
+    if (key === lastSpeechKeyRef.current) return;
+    lastSpeechKeyRef.current = key;
+    if (!speech) return; // null/clear is a no-op — the bubble dismisses on its own timer
+    setSpeechLeaving(false); // fresh utterance plays its entrance, even if one was exiting
+    setActiveSpeech({ text: speech.text, side: resolveSide(speech.side ?? "auto"), id: ++speechCounterRef.current });
+  }, [speech, resolveSide]);
+  // Hold for the read duration, then begin the exit animation.
+  useEffect(() => {
+    if (!activeSpeech) return;
+    const timer = setTimeout(() => setSpeechLeaving(true), speechDurationMs(activeSpeech.text));
+    return () => clearTimeout(timer);
+  }, [activeSpeech]);
+  // Once leaving, let the exit animation play, then unmount and notify.
+  useEffect(() => {
+    if (!speechLeaving) return;
+    const timer = setTimeout(() => {
+      setActiveSpeech(null);
+      setSpeechLeaving(false);
+      onSpeechEndRef.current?.();
+    }, SPEECH_EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [speechLeaving]);
+
   return (
     <div
       ref={rootRef}
@@ -627,6 +693,18 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
           <RightLeg scale={scale} theme={theme} showAnchor={showAnchor} />
         </Body>
         <Shadow scale={scale} theme={theme} />
+        {/* Speech bubble — sibling of Body inside the locomotion wrapper, so it travels with the
+            figure (body.x walk / body.y drop-jump). key=id remounts on each new utterance. */}
+        {activeSpeech && (
+          <SpeechBubble
+            key={activeSpeech.id}
+            text={activeSpeech.text}
+            side={activeSpeech.side}
+            scale={scale}
+            theme={theme}
+            leaving={speechLeaving}
+          />
+        )}
       </div>
     </div>
   );
