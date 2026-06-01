@@ -61,16 +61,32 @@ export type Action = {
 // come is an ENTRANCE — Tally starts `distance` off the anchor on the given side and walks IN to
 // the anchor, ending exactly there (no net displacement). `direction` for come is the side Tally
 // comes FROM; distance is in the same body-widths as walk.
-export type ActionSpec =
+export type ActionSpec = (
   | { name: "disagree" }
   | { name: "agree" }
   | { name: "walk"; direction: WalkDirection; distance: number }
   | { name: "come"; direction: WalkDirection; distance: number }
   | { name: "drop"; distance: number }
   | { name: "jump" }
-  | { name: "greet" };
+  | { name: "greet" }
+) & {
+  // Opt-in preemption. When this spec is dispatched while another action is in flight AND the active
+  // action is a pure gesture, it preempts immediately (and flushes any queued spec) instead of
+  // queueing behind it — used for user-triggered actions that shouldn't lag behind an idle gesture.
+  // Ignored (falls back to the default queue) when the active action is locomotion/vertical, whose
+  // net body.x/body.y side effect is settled only on completion — see isPureGesture. Absent = the
+  // default non-interrupting queue-behind behavior.
+  interrupt?: boolean;
+};
 
 export type ActionName = ActionSpec["name"];
+
+// walk/come commit a net body.x move, and drop/jump drive a body.y excursion — both settled ONLY in
+// the completion timer (see the action lifecycle in Tally). Preempting one mid-flight would strand
+// walkStateRef/verticalRef and snap the figure, so `interrupt` is honored only against pure gestures
+// (every other action touches solely reset-to-rest capabilities and tears down cleanly).
+const NET_EFFECT_ACTIONS = new Set<ActionName>(["walk", "come", "drop", "jump"]);
+export const isPureGesture = (name: ActionName): boolean => !NET_EFFECT_ACTIONS.has(name);
 
 // Each call creates fresh closures so the action can re-fire from a clean state.
 export function createAction(spec: ActionSpec): Action {

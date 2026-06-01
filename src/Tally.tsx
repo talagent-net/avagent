@@ -6,7 +6,7 @@ import { createLookAroundAnimation } from "./animation/lookAround";
 import { createFollowAnimation, type FollowTarget } from "./animation/follow";
 import { createAntennaWiggleAnimation } from "./animation/antennaWiggle";
 import { createEyeSpinAnimation } from "./animation/eyeSpin";
-import { createAction } from "./animation/actions";
+import { createAction, isPureGesture } from "./animation/actions";
 import type { ActionSpec } from "./animation/actions";
 import type { AnimationFn } from "./animation/engine";
 import { SpeechBubble, speechDurationMs, SPEECH_EXIT_MS, DEFAULT_FONT_FAMILY } from "./speech";
@@ -331,9 +331,11 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   useCapabilityAnimation(BODY_Y_KEY, bodyYAnimRef.current);
   const locomotionRef = useLocomotionRef();
 
-  // Action lifecycle. An active action plays to completion and is NOT interruptible. A trigger
-  // that arrives while an action is in flight is held in a single queue slot (depth 1) and plays
-  // when the current one finishes; a newer trigger replaces whatever is queued (latest-wins).
+  // Action lifecycle. By default an active action plays to completion and is NOT interruptible. A
+  // trigger that arrives while an action is in flight is held in a single queue slot (depth 1) and
+  // plays when the current one finishes; a newer trigger replaces whatever is queued (latest-wins).
+  // Exception: a trigger carrying `interrupt: true` preempts an in-flight PURE GESTURE immediately
+  // (and flushes the queue) — see the prop effect below.
   // lastActionKeyRef dedupes the prop by value (specs are objects) — to fire an identical action,
   // the consumer sets the prop to null then back. Setting the prop to null is a no-op for
   // playback: it neither cancels the running action nor clears the queue, it just resets the
@@ -366,6 +368,14 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
     if (!action) return; // null/clear is a no-op — doesn't interrupt or flush the queue
     if (activeRef.current === null) {
       activate(action); // idle → play now
+    } else if (action.interrupt && isPureGesture(activeRef.current.spec.name)) {
+      // Opt-in preemption: a higher-priority action cuts in front of an in-flight PURE GESTURE
+      // instead of queueing. activate() gives a fresh id, so the completion effect re-runs and its
+      // cleanup cancels the preempted gesture's timers. Flush the queue too — a preempting action
+      // shouldn't be tailed by a stale queued gesture. Locomotion/vertical actives are excluded
+      // (isPureGesture) because their net body.x/body.y commit lives in the completion timer.
+      queuedActionSpecRef.current = null;
+      activate(action);
     } else {
       queuedActionSpecRef.current = action; // busy → queue (replacing any prior queued)
     }
