@@ -45,7 +45,7 @@ export function speechDurationMs(text: string): number {
 const SPEECH_HEAD_HALF_W = 66;   // (HEAD_W + HEAD_OFFSET) / 2 in Tally
 const SPEECH_CENTER_ABOVE_ANCHOR = 125; // head vertical center above the anchor (matches TRACK_HEAD_ABOVE_ANCHOR)
 const SPEECH_GAP = 19;           // gap from the head's side edge to the bubble's inner edge
-const SPEECH_MAX_WIDTH = 180;    // bubble wraps past this content width
+const SPEECH_MAX_WIDTH = 192;    // bubble wraps past this content width
 const SPEECH_PAD_V = 8;
 const SPEECH_PAD_H = 12;
 const SPEECH_RADIUS = 12;

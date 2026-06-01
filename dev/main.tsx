@@ -100,7 +100,7 @@ function App() {
   const [action, setAction] = useState<ActionSpec | null>(null);
   const [walkDistance, setWalkDistance] = useState(2); // body-widths per walk press
   const [speech, setSpeech] = useState<SpeechSpec | null>(null);
-  const [speechText, setSpeechText] = useState("I'm an AI agent and avatar built by Peter.");
+  const [speechText, setSpeechText] = useState("Hi, I'm Tally. Agent and avatar built by Peter.");
   const [speechSide, setSpeechSide] = useState<SpeechSide>("auto");
 
   // Toggle a capability override on (pinned at its rest value) or off. Engaged capabilities

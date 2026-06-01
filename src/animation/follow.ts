@@ -24,17 +24,36 @@ export type FollowAnimation = {
   upperTurn: AnimationFn;
 };
 
-export function createFollowAnimation(target: { current: FollowTarget }): FollowAnimation {
+// Optional pose to START easing from, captured lazily on the first tick (so capabilities are
+// registered and hold their live values by then). Lets the follow continue from wherever the head
+// currently is — e.g. a hangout look-around gaze — instead of snapping to neutral before easing to
+// the cursor. Defaults to neutral.
+export function createFollowAnimation(
+  target: { current: FollowTarget },
+  getInitialPose?: () => { turn: number; tilt: number; upperTurn: number },
+): FollowAnimation {
   let curTurn = NEUTRAL;
   let curTilt = NEUTRAL;
   let curUpper = NEUTRAL;
   let lastElapsed = -1;
+  let seeded = false;
 
   // Idempotent within a tick: advance once per unique elapsed value (the three fns all call it in
   // the same frame), easing every pose toward the live target.
   const step = (elapsed: number, dt: number) => {
     if (elapsed === lastElapsed) return;
     lastElapsed = elapsed;
+    // Seed the eased state from the head's live pose on the first tick, so easing begins from there
+    // instead of snapping to neutral when track mode takes over a held pose.
+    if (!seeded) {
+      seeded = true;
+      if (getInitialPose) {
+        const p = getInitialPose();
+        curTurn = p.turn;
+        curTilt = p.tilt;
+        curUpper = p.upperTurn;
+      }
+    }
     const k = dt <= 0 ? 1 : 1 - Math.exp(-dt / FOLLOW_TAU_MS);
     curTurn += (target.current.turn - curTurn) * k;
     curTilt += (target.current.tilt - curTilt) * k;

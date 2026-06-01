@@ -486,6 +486,14 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
   const followTargetRef = useRef<FollowTarget>({ turn: 0.5, tilt: 0.5, upperTurn: 0.5 });
   useEffect(() => {
     if (mode !== "track") return;
+    // Seed the target from the head's current pose so that, until the first mousemove, the follow
+    // driver eases toward where the head already is (a continuous hand-off) rather than drifting to
+    // neutral.
+    followTargetRef.current = {
+      turn: engine.getCapability(HEAD_TURN_KEY),
+      tilt: engine.getCapability(HEAD_TILT_KEY),
+      upperTurn: engine.getCapability(UPPERBODY_TURN_KEY),
+    };
     const onMove = (e: MouseEvent) => {
       const root = rootRef.current;
       if (!root) return;
@@ -508,10 +516,20 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
       window.removeEventListener("mousemove", onMove);
       followTargetRef.current = { turn: 0.5, tilt: 0.5, upperTurn: 0.5 }; // reset so re-entry starts looking straight
     };
-  }, [mode, scale]);
+  }, [mode, scale, engine]);
   const follow = useMemo(
-    () => (mode === "track" && !activeAction ? createFollowAnimation(followTargetRef) : null),
-    [mode, activeAction],
+    () =>
+      mode === "track" && !activeAction
+        ? createFollowAnimation(followTargetRef, () => ({
+            // Begin easing from the head's current pose (e.g. a hangout look-around gaze) so the
+            // motion is continuous into track mode instead of snapping to neutral first. Read lazily
+            // on the first tick so the capabilities hold their live values by then.
+            turn: engine.getCapability(HEAD_TURN_KEY),
+            tilt: engine.getCapability(HEAD_TILT_KEY),
+            upperTurn: engine.getCapability(UPPERBODY_TURN_KEY),
+          }))
+        : null,
+    [mode, activeAction, engine],
   );
 
   // head.turn is an OFFSET on top of body.turn (renderers compute effective = sum). lookAround
