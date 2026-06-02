@@ -76,16 +76,27 @@ export function SpeechBubble({
   text,
   side,
   scale,
+  speechScale = 1,
   theme,
   leaving = false,
 }: {
   text: string;
   side: "left" | "right"; // already resolved (Tally turns "auto" into a concrete side)
   scale: number;
+  // Enlarge the bubble's box + text independently of the figure (see TallyProps.speechScale).
+  speechScale?: number;
   theme: ColorTheme;
   leaving?: boolean; // when true, play the exit animation (Tally unmounts after SPEECH_EXIT_MS)
 }) {
+  // Two scale factors. `s` is the plain FIGURE scale and drives everything structural — the anchor
+  // (offset, top), head-follow drift, the whole tail (length, body, outline), the outline stroke
+  // (border), the corner radius, and the padding. `sb` folds in speechScale and is applied to ONLY
+  // the font size and the max-width (text-wrap column). So raising speechScale enlarges the text and
+  // widens its wrap column proportionally, while every other dimension — chrome, tail, position —
+  // holds at figure scale. The box still reflows taller/wider to hug the bigger text, but no chrome
+  // is independently scaled. speechScale=1 → sb === s → byte-identical to before.
   const s = (v: number) => v * scale;
+  const sb = (v: number) => v * scale * speechScale;
   const offset = s(SPEECH_HEAD_HALF_W + SPEECH_GAP);
 
   // Head-follow. A per-frame renderer translates an outer wrapper (NOT the bubble itself, whose
@@ -134,9 +145,9 @@ export function SpeechBubble({
   // colored one flush at the bubble edge, then a slightly smaller white one shifted a border-width
   // INTO the bubble — so the white fill bridges into the bubble interior (no seam) while the outline
   // peeks out as a uniform border along the two slanted edges and the apex.
-  const B = s(SPEECH_BORDER * .75);
-  const L = s(SPEECH_TAIL_LEN);
-  const HH = s(SPEECH_TAIL_HALF);
+  const B = s(SPEECH_BORDER * .75);    // tail outline stroke — figure scale (matches the bubble border)
+  const L = s(SPEECH_TAIL_LEN);        // tail reach to the head — figure scale (keeps the apex on the head)
+  const HH = s(SPEECH_TAIL_HALF);      // tail body half-height — figure scale (tail unaffected by speechScale)
   const outlineTail: React.CSSProperties =
     side === "left"
       ? {
@@ -192,14 +203,14 @@ export function SpeechBubble({
         // an explicit width an absolutely-positioned box is shrink-to-fit and collapses to one
         // character per line; max-content sizes to the content and the cap forces normal wrapping.
         width: "max-content",
-        maxWidth: s(SPEECH_MAX_WIDTH),
+        maxWidth: sb(SPEECH_MAX_WIDTH), // text-wrap column widens with the font
         boxSizing: "border-box",
         padding: `${s(SPEECH_PAD_V)}px ${s(SPEECH_PAD_H)}px`,
         background: "#ffffff",
         border: `${s(SPEECH_BORDER)}px solid ${theme.outline}`,
         borderRadius: s(SPEECH_RADIUS),
         color: theme.outline,
-        fontSize: s(SPEECH_FONT),
+        fontSize: sb(SPEECH_FONT), // the only true text-size scale
         lineHeight: 1.3,
         fontFamily: theme.fontFamily ?? DEFAULT_FONT_FAMILY,
         fontWeight: 500,

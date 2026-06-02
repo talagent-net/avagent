@@ -156,6 +156,13 @@ export interface TallyProps {
   speech?: SpeechSpec | null;
   // Fired when a speech bubble finishes (times out and is removed).
   onSpeechEnd?: () => void;
+  // Enlarge the speech bubble's TEXT independently of the figure: `speechScale` scales only the font
+  // size and the max-width (text-wrap column) by `scale * speechScale`. Everything else — padding,
+  // outline stroke, corner radius, the tail, the anchor to the head, and head-follow drift — stays on
+  // the figure `scale`, so the chrome and the figure's linework weight are unchanged and the bubble
+  // stays pinned to the head. The box still reflows to hug the larger text. Default 1 (no change).
+  // Use to keep a readable bubble on small screens while the figure stays at scale=1.
+  speechScale?: number;
 }
 
 const BASE = {
@@ -171,7 +178,7 @@ export function Tally(props: TallyProps) {
   );
 }
 
-function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnchor = false, chestImage, debugOverrides, action, onWalkComplete, speech, onSpeechEnd }: TallyProps) {
+function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnchor = false, chestImage, debugOverrides, action, onWalkComplete, speech, onSpeechEnd, speechScale = 1 }: TallyProps) {
   const s = (v: number) => v * scale;
 
   // Capabilities — declared once at the root with their rest values.
@@ -771,6 +778,7 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
             text={activeSpeech.text}
             side={activeSpeech.side}
             scale={scale}
+            speechScale={speechScale}
             theme={theme}
             leaving={speechLeaving}
           />
