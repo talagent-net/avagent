@@ -1,7 +1,7 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Tally } from "../src";
-import type { ColorTheme, Mode, ActionSpec, SpeechSpec, SpeechSide } from "../src";
+import { Tally, tally } from "../src";
+import type { ColorTheme, Mode, ActionSpec, SpeechSpec, SpeechSide, Anatomy } from "../src";
 import openclaw from "./openclaw.png";
 import claudecode from "./claudecode.png";
 import codex from "./codex.png";
@@ -60,6 +60,49 @@ const themes: Record<string, ColorTheme> = {
   },
 };
 
+// A few demo character presets — each is just an override of `tally` (proportions only; theme and
+// behavior are independent). Tally is the default. NOTE: attachment/grounding for EXTREME proportions
+// isn't finalized yet (HEAD_TOP, leg hipTuck, BODY_BOTTOM are still literal), so very long/short legs
+// may not sit perfectly on the ground line — that's the next phase. Moderate variation looks right.
+const characters: Record<string, Anatomy> = {
+  Tally: tally,
+  Beanpole: {
+    ...tally,
+    body: { ...tally.body, width: 42, height: 74 },
+    head: { ...tally.head, width: 100, height: 80 },
+    arm: { ...tally.arm, upperWidth: 20, lowerWidth: 20, upperHeight: 56, lowerHeight: 46 },
+    leg: { ...tally.leg, legWidth: 20, legHeight: 42 },
+  },
+  Tank: {
+    ...tally,
+    body: { ...tally.body, width: 66, height: 58, radiusTop: 40, radiusBottom: 34 },
+    head: { ...tally.head, width: 138, height: 106, roundness: 46 },
+    arm: { ...tally.arm, upperWidth: 28, lowerWidth: 28, upperHeight: 40, lowerHeight: 32 },
+    leg: { ...tally.leg, legWidth: 28, legHeight: 30, footWidth: 38 },
+  },
+  Buglet: {
+    ...tally,
+    body: { ...tally.body, width: 44, height: 52 },
+    head: { ...tally.head, width: 150, height: 112 },
+    eye: { ...tally.eye, width: 20, height: 34 },
+    leg: { ...tally.leg, legHeight: 30 },
+  },
+  Blockhead: {
+    ...tally,
+    body: { ...tally.body, radiusTop: 14, radiusBottom: 10 },
+    head: { ...tally.head, roundness: 14 },
+    eye: { ...tally.eye, roundnessRatio: 0.2 },
+    ear: { ...tally.ear, roundnessRatio: 0.2 },
+  },
+  Squirt: {
+    ...tally,
+    body: { ...tally.body, width: 40, height: 48 },
+    head: { ...tally.head, width: 96, height: 74 },
+    arm: { ...tally.arm, upperHeight: 40, lowerHeight: 32 },
+    leg: { ...tally.leg, legHeight: 28 },
+  },
+};
+
 const scales = [.36, 0.5, 1, 1.5, 2, 2.5, 3, 3.5];
 const modes: Mode[] = ["hangout", "track", "connecting", "debug"];
 // Each debug capability with its rest value — toggling a capability on starts it at rest (no
@@ -90,8 +133,11 @@ const debugCapabilities: { key: string; rest: number }[] = [
 // Gesture actions fire with a fixed spec; walk takes direction + distance (body-widths).
 const gestures: ActionSpec[] = [{ name: "disagree" }, { name: "agree" }, { name: "greet" }, { name: "shrug" }, { name: "hangHead" }];
 
+const GROUND_Y = 480; // px from the demo pane's top to the figure's anchor — i.e. the ground line.
+
 function App() {
   const [themeName, setThemeName] = useState("default");
+  const [characterName, setCharacterName] = useState("Tally");
   const [scale, setScale] = useState(1);
   const [showAnchor, setShowAnchor] = useState(false);
   const [mode, setMode] = useState<Mode>("hangout");
@@ -146,6 +192,18 @@ function App() {
         }}
       >
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <label style={{ fontSize: 14, color: "#666" }}>
+          Character
+          <select
+            value={characterName}
+            onChange={(e) => setCharacterName(e.target.value)}
+            style={{ marginLeft: 8, padding: "4px 8px" }}
+          >
+            {Object.keys(characters).map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </label>
         <label style={{ fontSize: 14, color: "#666" }}>
           Theme
           <select
@@ -334,16 +392,31 @@ function App() {
       <div
         style={{
           flex: 1,
+          position: "relative",
           display: "flex",
           justifyContent: "center",
           alignItems: "flex-start",
-          paddingTop: 480,
+          paddingTop: GROUND_Y,
           overflow: "auto",
         }}
       >
+        {/* Ground plane at the figure's anchor (feet/ground line) — for eyeballing leg grounding. */}
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: GROUND_Y,
+            bottom: 0,
+            background: "#eef1f5",
+            borderTop: "2px solid #c7ccd6",
+            pointerEvents: "none",
+          }}
+        />
         <Tally
           scale={scale}
           mode={mode}
+          anatomy={characters[characterName]}
           theme={themes[themeName]}
           showAnchor={showAnchor}
           chestImage={logos[logoName]}
