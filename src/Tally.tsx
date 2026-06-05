@@ -585,7 +585,13 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
     }
   }, [action, activate]);
   const activeAction = useMemo(
-    () => (active ? createAction(active.spec, GAIT_WALK_MS, GAIT_TRAVEL_PER_BW, JUMP_HEIGHT_BW, JUMP_FLAIL_SPEED, DROP_FLAIL_SPEED) : null),
+    () => (active ? createAction(active.spec, {
+      walkMsPerBodyWidth: GAIT_WALK_MS,
+      travelPerBodyWidth: GAIT_TRAVEL_PER_BW,
+      jumpHeightBodyWidths: JUMP_HEIGHT_BW,
+      jumpFlailSpeed: JUMP_FLAIL_SPEED,
+      dropFlailSpeed: DROP_FLAIL_SPEED,
+    }) : null),
     [active, GAIT_WALK_MS, GAIT_TRAVEL_PER_BW, JUMP_HEIGHT_BW, JUMP_FLAIL_SPEED, DROP_FLAIL_SPEED],
   );
   useEffect(() => {

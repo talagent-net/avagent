@@ -92,15 +92,21 @@ export type ActionName = ActionSpec["name"];
 const NET_EFFECT_ACTIONS = new Set<ActionName>(["walk", "come", "drop", "jump"]);
 export const isPureGesture = (name: ActionName): boolean => !NET_EFFECT_ACTIONS.has(name);
 
+// Per-character behavior tuning passed into the action builders — the resolved gait/jump/drop knobs
+// (see GaitAnatomy/JumpAnatomy/DropAnatomy). Bundled into one object so the call site is self-naming
+// and new knobs are a one-line addition rather than another positional arg. Every field is optional;
+// each leaf builder (createWalk/createJump/createDrop) falls back to its own module default when a
+// field is omitted, so {} reproduces the stock behavior.
+export interface ActionBehavior {
+  walkMsPerBodyWidth?: number;
+  travelPerBodyWidth?: number;
+  jumpHeightBodyWidths?: number;
+  jumpFlailSpeed?: number;
+  dropFlailSpeed?: number;
+}
+
 // Each call creates fresh closures so the action can re-fire from a clean state.
-export function createAction(
-  spec: ActionSpec,
-  walkMsPerBodyWidth?: number,
-  travelPerBodyWidth?: number,
-  jumpHeightBodyWidths?: number,
-  jumpFlailSpeed?: number,
-  dropFlailSpeed?: number,
-): Action {
+export function createAction(spec: ActionSpec, behavior: ActionBehavior = {}): Action {
   switch (spec.name) {
     case "disagree":
       // Head shake only (no arms) — the head-turn "no", mirroring agree's head-only nod.
@@ -155,7 +161,7 @@ export function createAction(
         },
       };
     case "walk": {
-      const walk = createWalk(spec.direction, spec.distance, walkMsPerBodyWidth, travelPerBodyWidth);
+      const walk = createWalk(spec.direction, spec.distance, behavior.walkMsPerBodyWidth, behavior.travelPerBodyWidth);
       return {
         duration: walk.duration,
         animations: walk.animations,
@@ -173,7 +179,7 @@ export function createAction(
       // walks IN to the anchor. The gait travels TOWARD the anchor — i.e. the opposite direction
       // — so reuse createWalk with the flipped direction; `arrive` makes body.x slide offset→0.
       const gaitDirection: WalkDirection = spec.direction === "left" ? "right" : "left";
-      const walk = createWalk(gaitDirection, spec.distance, walkMsPerBodyWidth, travelPerBodyWidth);
+      const walk = createWalk(gaitDirection, spec.distance, behavior.walkMsPerBodyWidth, behavior.travelPerBodyWidth);
       return {
         duration: walk.duration,
         animations: walk.animations,
@@ -191,7 +197,7 @@ export function createAction(
       // Vertical mirror of come: free-fall from `distance` above and land on the anchor. The gait
       // is frantic per-limb flail (during the fall, rate per-character) + a landing crouch; the
       // descent is component-side.
-      const d = createDrop(spec.distance, dropFlailSpeed);
+      const d = createDrop(spec.distance, behavior.dropFlailSpeed);
       return {
         duration: d.duration,
         animations: d.animations,
@@ -203,7 +209,7 @@ export function createAction(
       // Vertical hop, no net displacement: anticipation crouch → spring → parabolic arc → partial
       // landing crouch. Height + airborne flail rate are per-character (jump anatomy); flail applies
       // only while airborne.
-      const j = createJump(jumpHeightBodyWidths, jumpFlailSpeed);
+      const j = createJump(behavior.jumpHeightBodyWidths, behavior.jumpFlailSpeed);
       return {
         duration: j.duration,
         animations: j.animations,
