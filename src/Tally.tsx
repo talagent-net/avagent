@@ -340,6 +340,15 @@ export interface TallyProps {
   // AT/BELOW the feet (so it reads as a cast shadow on the floor instead of a soft ellipse that smudges
   // above the ground line). Default false (full soft shadow, for a plain/no-ground background).
   groundShadow?: boolean;
+  // Which part of the figure to render. "full" (default) = the whole standing figure. "head" = ONLY the
+  // head subtree (eyes/ears/antenna), for compact author avatars at profile-pic scale. This is a
+  // STRUCTURAL choice, orthogonal to `mode` (behavior): pair `view="head"` with `mode="frozen"` for a
+  // still portrait, or any other mode for an animated head. In head-only the component sizes itself to
+  // the head's own anatomy-derived bounding box (head width/height + the antenna that pokes above the
+  // crown — all included, nothing clipped), so a host can size a slot to that box instead of measuring
+  // the DOM. The body, arms, legs, ground shadow, locomotion and speech bubble are not rendered, and
+  // `chestImage`/`groundShadow` are ignored (they live on the body).
+  view?: "full" | "head";
 }
 
 const BASE = {
@@ -370,7 +379,7 @@ export function Tally(props: TallyProps) {
   );
 }
 
-function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnchor = false, chestImage, debugOverrides, action, onWalkComplete, speech, onSpeechEnd, speechScale = 1, groundShadow = false }: TallyProps) {
+function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnchor = false, chestImage, debugOverrides, action, onWalkComplete, speech, onSpeechEnd, speechScale = 1, groundShadow = false, view = "full" }: TallyProps) {
   const s = (v: number) => v * scale;
   const rig = useRig();
   const { BODY_W, ARM_FLAIL_REST_CAP, LEG_FLAIL_REST_CAP, HEAD_HALF_W, HEAD_CENTER_ABOVE_ANCHOR, SPEECH_GAP, SPEECH_MAX_WIDTH, GAIT_WALK_MS, GAIT_TRAVEL_PER_BW, JUMP_HEIGHT_BW, JUMP_FLAIL_SPEED, DROP_FLAIL_SPEED } = rig;
@@ -992,6 +1001,37 @@ function TallyInner({ scale = 1, mode = "hangout", theme = defaultTheme, showAnc
     return () => clearTimeout(timer);
   }, [speechLeaving]);
 
+  // Head-only render: just the <Head> subtree (eyes/ears/antenna) in its own intrinsically-sized box,
+  // for compact author avatars. Reuses the same Head component and the engine's per-mode animations, so
+  // it animates (or, with mode="frozen", stays still) exactly like the head in the full figure. The box
+  // is the head's own extent — head width × head height — grown upward by the antenna's protrusion above
+  // the crown (ANTENNA_TOP is negative: the antenna pokes |ANTENNA_TOP| px above the head box), so the
+  // whole silhouette sits inside with nothing clipped (spec: antenna-inclusive, frame-agnostic). The head
+  // is offset down by that protrusion so the antenna's top lands at the box's top edge; left:50% centers
+  // it in the head-width box. No body/limbs/shadow/locomotion/speech — this is a static portrait surface.
+  if (view === "head") {
+    const { HEAD_W, HEAD_H, HEAD_OFFSET, ANTENNA_TOP } = rig;
+    const antennaProtrude = Math.max(0, -ANTENNA_TOP);
+    return (
+      <div
+        style={{
+          position: "relative",
+          width: s(HEAD_W + HEAD_OFFSET),
+          height: s(HEAD_H + HEAD_OFFSET + antennaProtrude),
+          overflow: "visible",
+        }}
+      >
+        <Head scale={scale} theme={theme} showAnchor={showAnchor} topOverride={antennaProtrude}>
+          <LeftEye scale={scale} theme={theme} />
+          <RightEye scale={scale} theme={theme} />
+          <LeftEar scale={scale} theme={theme} />
+          <RightEar scale={scale} theme={theme} />
+          <Antenna scale={scale} theme={theme} showAnchor={showAnchor} signal={mode === "connecting"} />
+        </Head>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={rootRef}
@@ -1479,11 +1519,16 @@ function Head({
   scale = 1,
   theme,
   showAnchor = false,
+  topOverride,
   children,
 }: {
   scale: number;
   theme: ColorTheme;
   showAnchor?: boolean;
+  // Vertical placement (unscaled px) of the head box within its parent. Defaults to HEAD_TOP, the
+  // neck-anchored offset used in the full figure. The head-only render passes its own value so the
+  // head sits below the antenna's protrusion inside the intrinsic box.
+  topOverride?: number;
   children: React.ReactNode;
 }) {
   const s = (v: number) => v * scale;
@@ -1496,7 +1541,7 @@ function Head({
       style={{
         position: "absolute",
         zIndex: 5,
-        top: s(HEAD_TOP),
+        top: s(topOverride ?? HEAD_TOP),
         left: "50%",
         transform: `translateX(-50%) rotate(${HEAD_ROTATION}deg)`,
         transformOrigin: `${s(HEAD_PIVOT_X)}px ${s(HEAD_PIVOT_Y)}px`,

@@ -169,6 +169,7 @@ function App() {
   const [showAnchor, setShowAnchor] = useState(false);
   const [groundShadow, setGroundShadow] = useState(false);
   const [mode, setMode] = useState<Mode>("hangout");
+  const [view, setView] = useState<"full" | "head">("full");
   const [overrides, setOverrides] = useState<Record<string, number>>({});
   const [logoName, setLogoName] = useState<string>("openclaw");
   const [action, setAction] = useState<ActionSpec | null>(null);
@@ -294,6 +295,18 @@ function App() {
             >
               {modes.map((m) => (
                 <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          </label>
+          <label style={{ fontSize: 14, color: "#666" }}>
+            View
+            <select
+              value={view}
+              onChange={(e) => setView(e.target.value as "full" | "head")}
+              style={{ marginLeft: 8, padding: "4px 8px" }}
+            >
+              {(["full", "head"] as const).map((v) => (
+                <option key={v} value={v}>{v}</option>
               ))}
             </select>
           </label>
@@ -452,6 +465,7 @@ function App() {
         <Tally
           scale={scale}
           mode={mode}
+          view={view}
           anatomy={characters[characterName]}
           theme={themes[themeName]}
           showAnchor={showAnchor}
