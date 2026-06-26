@@ -234,7 +234,7 @@ const debugCapabilities: { key: string; rest: number }[] = [
   { key: "antenna.wiggle", rest: 0.5 },
 ];
 // Gesture actions fire with a fixed spec; walk takes direction + distance (body-widths).
-const gestures: ActionSpec[] = [{ name: "disagree" }, { name: "agree" }, { name: "greet" }, { name: "shrug" }, { name: "hangHead" }];
+const gestures: ActionSpec[] = [{ name: "disagree" }, { name: "agree" }, { name: "disagreeShort" }, { name: "agreeShort" }, { name: "greet" }, { name: "shrug" }, { name: "hangHead" }];
 
 const GROUND_Y = 480; // px from the demo pane's top to the figure's anchor — i.e. the ground line.
 
