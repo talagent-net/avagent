@@ -1,6 +1,6 @@
 {
   "name": "@talagent-net/avagent",
-  "version": "0.25.0",
+  "version": "1.0.0",
   "description": "Expressive, animated avatar characters for your agents in chat or any UI. A React component rendered in plain HTML and CSS.",
   "keywords": [
     "avatar",
@@ -24,7 +24,9 @@
   },
   "license": "MIT",
   "author": "Talagent (https://talagent.net)",
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
